@@ -1,34 +1,11 @@
 /**
- * PDF Parser — placeholder for Rust/WASM implementation.
- *
- * This module currently accepts pre-extracted text from PDF files.
- * A high-performance binary PDF parser will be added via the Rust/WASM
- * pipeline described in src/lib/rust-wasm/README.md.
- *
- * Signature preserved for future swap-in.
+ * Server-only PDF text extractor using pdf-parse v2 (PDFParse class API).
+ * Dynamic import defers module evaluation so Turbopack never processes
+ * pdf-parse's worker files at build time.
  */
-
-import type { ParsedDocument } from '@/lib/types/document';
-import { parseTextContent } from './text-parser';
-
-export type PdfParseOptions = {
-  extractedText: string;
-  fileName?: string;
-  pageCount?: number;
-};
-
-export function parsePdfContent(options: PdfParseOptions): ParsedDocument {
-  const { extractedText, fileName, pageCount } = options;
-
-  const parsed = parseTextContent(extractedText);
-
-  return {
-    ...parsed,
-    pageCount: pageCount ?? parsed.pageCount,
-    metadata: {
-      ...parsed.metadata,
-      fileName: fileName ?? null,
-      parserVersion: 'text-fallback-v1',
-    },
-  };
+export async function parsePdf(buffer: Buffer): Promise<string> {
+  const { PDFParse } = await import('pdf-parse');
+  const parser = new PDFParse({ data: new Uint8Array(buffer) });
+  const result = await parser.getText();
+  return result.text;
 }
