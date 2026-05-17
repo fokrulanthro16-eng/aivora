@@ -437,124 +437,136 @@ export function KnowledgeVaultPanel({ className, onAction }: Props) {
                   {/* One-click actions */}
                   {onAction && (
                     <div className="space-y-2">
-
-                      {/* ── Auto Research Report — primary action ── */}
-                      <div className="space-y-1">
-                        <button
-                          onClick={() => {
-                            setConfirmDeleteId(null);
-                            setReportSentId(doc.id);
-                            onAction(
-                              autoResearchPrompt(doc.title, doc.fileName ?? doc.title),
-                              doc.id,
-                            );
-                          }}
-                          className="w-full flex items-center gap-2 py-1.5 px-3 rounded-xl
-                            bg-gradient-to-r from-violet-500/12 via-cyan-500/8 to-violet-500/12
-                            border border-violet-400/25 hover:border-violet-400/40
-                            text-[10px] font-mono text-violet-200 hover:text-white
-                            transition-all duration-200 group"
-                        >
-                          <BrainCircuit className="w-3 h-3 text-violet-400 flex-shrink-0" />
-                          <span className="font-semibold">Auto Research Report</span>
-                          <span className="ml-auto text-[7px] font-bold uppercase px-1.5 py-0.5 rounded
-                            bg-violet-500/20 border border-violet-400/20 text-violet-300 flex-shrink-0">
-                            Research OS
-                          </span>
-                        </button>
-
-                        {/* Sent confirmation */}
-                        <AnimatePresence>
-                          {reportSentId === doc.id && (
-                            <motion.div
-                              key="report-sent"
-                              initial={{ opacity: 0, height: 0 }}
-                              animate={{ opacity: 1, height: 'auto' }}
-                              exit={{ opacity: 0, height: 0 }}
-                              transition={{ duration: 0.15 }}
-                              className="overflow-hidden"
+                      {doc.chunksCount === 0 ? (
+                        /* No chunks — show a clear disabled state */
+                        <div className="flex items-center gap-2 px-2 py-1.5 rounded-xl
+                          bg-amber-500/6 border border-amber-400/15">
+                          <AlertCircle className="w-3 h-3 text-amber-400/50 flex-shrink-0" />
+                          <p className="text-[9px] font-mono text-amber-300/50">
+                            No chunks indexed — re-upload this file to enable actions.
+                          </p>
+                        </div>
+                      ) : (
+                        <>
+                          {/* ── Auto Research Report — primary action ── */}
+                          <div className="space-y-1">
+                            <button
+                              onClick={() => {
+                                setConfirmDeleteId(null);
+                                setReportSentId(doc.id);
+                                onAction(
+                                  autoResearchPrompt(doc.title, doc.fileName ?? doc.title),
+                                  doc.id,
+                                );
+                              }}
+                              className="w-full flex items-center gap-2 py-1.5 px-3 rounded-xl
+                                bg-gradient-to-r from-violet-500/12 via-cyan-500/8 to-violet-500/12
+                                border border-violet-400/25 hover:border-violet-400/40
+                                text-[10px] font-mono text-violet-200 hover:text-white
+                                transition-all duration-200 group"
                             >
-                              <div className="flex items-center gap-1.5 px-1 py-0.5">
-                                <CheckCircle className="w-2.5 h-2.5 text-violet-400/70 flex-shrink-0" />
-                                <p className="text-[9px] font-mono text-violet-300/60">
-                                  Research report prompt sent to Agent Chat.
-                                </p>
-                              </div>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
-                      </div>
+                              <BrainCircuit className="w-3 h-3 text-violet-400 flex-shrink-0" />
+                              <span className="font-semibold">Auto Research Report</span>
+                              <span className="ml-auto text-[7px] font-bold uppercase px-1.5 py-0.5 rounded
+                                bg-violet-500/20 border border-violet-400/20 text-violet-300 flex-shrink-0">
+                                Research OS
+                              </span>
+                            </button>
 
-                      {/* ── Quick actions ── */}
-                      <div className="flex flex-wrap gap-1">
-                        {QUICK_ACTIONS.map(({ label, prompt }) => (
-                          <button
-                            key={label}
-                            onClick={() => {
-                              setConfirmDeleteId(null);
-                              setReportSentId(null);
-                              onAction(prompt(doc.title), doc.id);
-                            }}
-                            className="px-2 py-0.5 rounded-lg bg-white/4 border border-white/8
-                              text-[9px] font-mono text-white/40
-                              hover:bg-cyan-500/15 hover:border-cyan-400/25 hover:text-cyan-300
-                              transition-all duration-150"
-                          >
-                            {label}
-                          </button>
-                        ))}
-                        {/* Toggle deep actions */}
-                        <button
-                          onClick={() =>
-                            setExpandedCardId((prev) => (prev === doc.id ? null : doc.id))
-                          }
-                          className="px-2 py-0.5 rounded-lg bg-white/4 border border-white/8
-                            text-[9px] font-mono text-white/30
-                            hover:bg-violet-500/15 hover:border-violet-400/25 hover:text-violet-300
-                            transition-all duration-150 flex items-center gap-0.5"
-                        >
-                          {expandedCardId === doc.id ? 'Less' : 'More'}
-                          <ChevronDown
-                            className={cn(
-                              'w-2.5 h-2.5 transition-transform duration-200',
-                              expandedCardId === doc.id && 'rotate-180',
-                            )}
-                          />
-                        </button>
-                      </div>
-
-                      {/* Deep-dive actions — shown when expanded */}
-                      <AnimatePresence initial={false}>
-                        {expandedCardId === doc.id && (
-                          <motion.div
-                            key="deep"
-                            initial={{ opacity: 0, height: 0 }}
-                            animate={{ opacity: 1, height: 'auto' }}
-                            exit={{ opacity: 0, height: 0 }}
-                            transition={{ duration: 0.18 }}
-                            className="overflow-hidden"
-                          >
-                            <div className="flex flex-wrap gap-1 pt-0.5 border-t border-white/5">
-                              {DEEP_ACTIONS.map(({ label, prompt }) => (
-                                <button
-                                  key={label}
-                                  onClick={() => {
-                                    setConfirmDeleteId(null);
-                                    setReportSentId(null);
-                                    onAction(prompt(doc.title), doc.id);
-                                  }}
-                                  className="px-2 py-0.5 rounded-lg bg-white/4 border border-white/8
-                                    text-[9px] font-mono text-white/40
-                                    hover:bg-violet-500/15 hover:border-violet-400/25 hover:text-violet-300
-                                    transition-all duration-150"
+                            {/* Sent confirmation */}
+                            <AnimatePresence>
+                              {reportSentId === doc.id && (
+                                <motion.div
+                                  key="report-sent"
+                                  initial={{ opacity: 0, height: 0 }}
+                                  animate={{ opacity: 1, height: 'auto' }}
+                                  exit={{ opacity: 0, height: 0 }}
+                                  transition={{ duration: 0.15 }}
+                                  className="overflow-hidden"
                                 >
-                                  {label}
-                                </button>
-                              ))}
-                            </div>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
+                                  <div className="flex items-center gap-1.5 px-1 py-0.5">
+                                    <CheckCircle className="w-2.5 h-2.5 text-violet-400/70 flex-shrink-0" />
+                                    <p className="text-[9px] font-mono text-violet-300/60">
+                                      Research report prompt sent to Agent Chat.
+                                    </p>
+                                  </div>
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
+                          </div>
+
+                          {/* ── Quick actions ── */}
+                          <div className="flex flex-wrap gap-1">
+                            {QUICK_ACTIONS.map(({ label, prompt }) => (
+                              <button
+                                key={label}
+                                onClick={() => {
+                                  setConfirmDeleteId(null);
+                                  setReportSentId(null);
+                                  onAction(prompt(doc.title), doc.id);
+                                }}
+                                className="px-2 py-0.5 rounded-lg bg-white/4 border border-white/8
+                                  text-[9px] font-mono text-white/40
+                                  hover:bg-cyan-500/15 hover:border-cyan-400/25 hover:text-cyan-300
+                                  transition-all duration-150"
+                              >
+                                {label}
+                              </button>
+                            ))}
+                            {/* Toggle deep actions */}
+                            <button
+                              onClick={() =>
+                                setExpandedCardId((prev) => (prev === doc.id ? null : doc.id))
+                              }
+                              className="px-2 py-0.5 rounded-lg bg-white/4 border border-white/8
+                                text-[9px] font-mono text-white/30
+                                hover:bg-violet-500/15 hover:border-violet-400/25 hover:text-violet-300
+                                transition-all duration-150 flex items-center gap-0.5"
+                            >
+                              {expandedCardId === doc.id ? 'Less' : 'More'}
+                              <ChevronDown
+                                className={cn(
+                                  'w-2.5 h-2.5 transition-transform duration-200',
+                                  expandedCardId === doc.id && 'rotate-180',
+                                )}
+                              />
+                            </button>
+                          </div>
+
+                          {/* Deep-dive actions — shown when expanded */}
+                          <AnimatePresence initial={false}>
+                            {expandedCardId === doc.id && (
+                              <motion.div
+                                key="deep"
+                                initial={{ opacity: 0, height: 0 }}
+                                animate={{ opacity: 1, height: 'auto' }}
+                                exit={{ opacity: 0, height: 0 }}
+                                transition={{ duration: 0.18 }}
+                                className="overflow-hidden"
+                              >
+                                <div className="flex flex-wrap gap-1 pt-0.5 border-t border-white/5">
+                                  {DEEP_ACTIONS.map(({ label, prompt }) => (
+                                    <button
+                                      key={label}
+                                      onClick={() => {
+                                        setConfirmDeleteId(null);
+                                        setReportSentId(null);
+                                        onAction(prompt(doc.title), doc.id);
+                                      }}
+                                      className="px-2 py-0.5 rounded-lg bg-white/4 border border-white/8
+                                        text-[9px] font-mono text-white/40
+                                        hover:bg-violet-500/15 hover:border-violet-400/25 hover:text-violet-300
+                                        transition-all duration-150"
+                                    >
+                                      {label}
+                                    </button>
+                                  ))}
+                                </div>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>

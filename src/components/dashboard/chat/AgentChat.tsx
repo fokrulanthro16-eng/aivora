@@ -224,8 +224,8 @@ export function AgentChat({
             finalAnswer = count > 0
               ? `**${count} source chunk${count !== 1 ? 's' : ''} retrieved from your knowledge documents.**\n\n` +
                 `Click **Enable Local AI** in the header to generate a grounded answer from this context.`
-              : `**Aivora's vector system is connected, but no knowledge documents have been uploaded yet.**\n\n` +
-                `Upload .txt or .md files via the Admin panel to activate source-grounded retrieval. ` +
+              : `**No knowledge documents are indexed yet.**\n\n` +
+                `Upload .txt, .md, .pdf, .docx, .png, .jpg, .jpeg, or .webp files via the **Vault** tab to activate source-grounded retrieval. ` +
                 `Or click **Enable Local AI** to answer general questions using browser-local Phi-3.5-mini.`;
           }
         } else {
@@ -524,7 +524,7 @@ export function AgentChat({
                       {msg.needsMoreContext && !msg.citations?.length && msg.systemMode !== 'local-webllm' && (
                         <div className="flex items-center gap-1.5 mt-2 text-amber-400/70 text-[11px]">
                           <AlertTriangle className="w-3 h-3" />
-                          <span>No source documents found — upload files to enable grounded answers</span>
+                          <span>No matching content found — try a Vault action or refine your query</span>
                         </div>
                       )}
                     </div>

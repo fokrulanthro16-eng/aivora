@@ -16,6 +16,7 @@ import { selfCorrect } from '@/lib/ai/reasoning/self-correct';
 import { retrieve, retrieveWithRetry } from '@/lib/ai/retrieval/hybrid-retriever';
 import { rerank } from '@/lib/ai/retrieval/reranker';
 import { buildCitation, deduplicateCitations, hasGroundedCitations } from '@/lib/ai/citations/source-schema';
+import { countDocuments } from '@/lib/db/vector/vector-store';
 import { callLLM } from './agent-state';
 import { ANSWER_SYSTEM_PROMPT } from '@/lib/ai/prompts/system';
 import { buildAnswerPrompt } from '@/lib/ai/prompts/agent-loop';
@@ -293,10 +294,14 @@ async function runAgentLoop(
     filterDocumentIds: filters?.documentIds,
   };
 
+  console.log('[aivora-agent] filters:', JSON.stringify(filters ?? null));
+
   // ── B. RETRIEVE ────────────────────────────────────────────────────────────
   // Use the primary search intent for initial retrieval.
   const primaryIntent = planResult.searchIntents[0] ?? query;
   const { chunks: initialChunks } = await retrieve(primaryIntent, retrievalOptions);
+
+  console.log('[aivora-agent] retrieved chunks (initial):', initialChunks.length);
 
   let retrievalSummary = `Retrieved ${initialChunks.length} chunk(s) for query: "${primaryIntent}".`;
 
@@ -323,6 +328,8 @@ async function runAgentLoop(
   // Rerank to top-5 most relevant chunks for answer generation.
   const topChunks = rerank(finalChunks, 5);
 
+  console.log('[aivora-agent] top chunks after rerank:', topChunks.length);
+
   // ── E. RESPOND ─────────────────────────────────────────────────────────────
   const citations = deduplicateCitations(topChunks.map(buildCitation));
 
@@ -333,15 +340,47 @@ async function runAgentLoop(
     corrections,
   };
 
-  // No chunks at all — KB empty, signal WebLLM for general questions.
+  // No chunks retrieved — distinguish between "no documents" and "no match".
   if (topChunks.length === 0) {
+    const docCount = await countDocuments().catch(() => 0);
+    console.log('[aivora-agent] document count:', docCount, '| chunk count for query: 0');
+
+    if (docCount > 0) {
+      const scopeNote = filters?.documentIds?.length
+        ? ' from the selected document'
+        : '';
+      const answerText =
+        `**No relevant content found${scopeNote} for this query.**\n\n` +
+        `Your Knowledge Vault has **${docCount}** indexed document${docCount !== 1 ? 's' : ''}, ` +
+        `but no chunks matched the query: _"${query}"_\n\n` +
+        `**Try:**\n` +
+        `- Use a Vault action (Auto Research Report, Summarize, Key Points) directly on the document card\n` +
+        `- Include the document title or specific topic in your question\n` +
+        `- Ask about a subject you know is covered in your uploaded files`;
+
+      return {
+        answer: answerText,
+        reasoningTrace: {
+          ...baseTrace,
+          retrievalSummary: `${docCount} document(s) indexed; no chunks matched similarity threshold for this query.`,
+          reflection: 'Documents are indexed but no relevant chunks were retrieved. The query may be too generic or off-topic.',
+          corrections: ['Try a Vault action for document-specific queries, or rephrase with specific terms from the document.'],
+        },
+        citations: [],
+        confidence: 0.25,
+        needsMoreContext: true,
+        needsLocalLLM: true,
+      };
+    }
+
+    // Truly no documents uploaded yet.
     return {
       answer: '',
       reasoningTrace: {
         ...baseTrace,
-        retrievalSummary: 'Vector store connected — no knowledge chunks indexed yet.',
-        reflection: 'Knowledge Vault is empty. No documents have been uploaded yet.',
-        corrections: ['Upload .txt or .md files via the Admin panel to enable grounded retrieval.'],
+        retrievalSummary: 'Vector store connected — no knowledge documents indexed yet.',
+        reflection: 'Knowledge Vault is empty. Upload documents to enable grounded retrieval.',
+        corrections: ['Upload .txt, .md, .pdf, .docx, .png, .jpg, .jpeg, or .webp files via the Vault tab.'],
       },
       citations: [],
       confidence: 0.45,
@@ -377,7 +416,7 @@ async function runAgentLoop(
   if (reflection.isOutOfScope) {
     answer =
       `This query is outside the scope of the available knowledge documents. ` +
-      `Try rephrasing your question or upload more relevant files via the Admin panel.`;
+      `Try rephrasing your question, or upload more relevant files via the Vault tab.`;
     confidence = 0.0;
     needsMoreContext = true;
     corrections = [...corrections, 'Query is out of scope for available documents.'];

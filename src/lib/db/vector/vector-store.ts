@@ -80,3 +80,15 @@ export async function getDocument(documentId: string) {
   if (error) throw new Error(`Document not found: ${error.message}`);
   return data;
 }
+
+/** Returns the number of rows in the documents table. Returns 0 on error (safe fallback). */
+export async function countDocuments(): Promise<number> {
+  const { count, error } = await supabaseServer
+    .from('documents')
+    .select('id', { count: 'exact', head: true });
+  if (error) {
+    console.warn('[vector-store] countDocuments error:', error.message);
+    return 0;
+  }
+  return count ?? 0;
+}

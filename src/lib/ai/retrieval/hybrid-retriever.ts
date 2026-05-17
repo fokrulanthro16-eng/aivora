@@ -32,13 +32,21 @@ export async function retrieve(
     filterDocumentIds,
   } = options;
 
+  // When the query is scoped to specific documents, use a very permissive
+  // threshold (0.05) so generic action prompts like "Summarize this document"
+  // always return the best available chunks from the targeted document rather
+  // than silently returning zero results due to low query-chunk cosine similarity.
+  const effectiveThreshold = filterDocumentIds?.length
+    ? 0.05
+    : similarityThreshold;
+
   const queryEmbedding = await embedText(query);
 
   const chunks = await hybridSearch({
     queryEmbedding,
     queryText: query,
     matchCount,
-    similarityThreshold,
+    similarityThreshold: effectiveThreshold,
     filterTags,
     filterDocumentIds,
   });
