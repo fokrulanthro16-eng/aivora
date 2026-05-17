@@ -1,7 +1,7 @@
 'use client';
 
 import { motion, AnimatePresence } from 'framer-motion';
-import { ExternalLink, FileSearch, Fingerprint, Hash, Shield } from 'lucide-react';
+import { ExternalLink, FileSearch, Hash, Shield, Layers } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import type { SourceCitation } from '@/lib/types/citation';
 
@@ -10,10 +10,12 @@ type Props = {
   className?: string;
 };
 
-function confidenceLabel(score: number): { label: string; color: string; bg: string } {
-  if (score >= 0.8) return { label: 'HIGH', color: '#22d3ee', bg: 'rgba(34,211,238,0.1)' };
-  if (score >= 0.6) return { label: 'MED', color: '#8b5cf6', bg: 'rgba(139,92,246,0.1)' };
-  return { label: 'LOW', color: '#f59e0b', bg: 'rgba(245,158,11,0.1)' };
+// ── Score helpers ─────────────────────────────────────────────────────────────
+
+function scoreLabel(score: number): { label: string; color: string; bg: string } {
+  if (score >= 0.8) return { label: 'HIGH', color: '#22d3ee', bg: 'rgba(34,211,238,0.10)' };
+  if (score >= 0.6) return { label: 'MED',  color: '#8b5cf6', bg: 'rgba(139,92,246,0.10)' };
+  return                { label: 'LOW',  color: '#f59e0b', bg: 'rgba(245,158,11,0.10)' };
 }
 
 function accentColor(score: number): string {
@@ -22,10 +24,13 @@ function accentColor(score: number): string {
   return '#f59e0b';
 }
 
+// ── Component ─────────────────────────────────────────────────────────────────
+
 export function SourceCitationPanel({ citations, className }: Props) {
   return (
     <div className={cn('flex flex-col h-full overflow-hidden', className)}>
-      {/* Header */}
+
+      {/* ── Header ── */}
       <div className="flex items-center justify-between px-5 pt-4 pb-3 flex-shrink-0 border-b border-white/5">
         <div className="flex items-center gap-2">
           <FileSearch className="w-3.5 h-3.5 text-violet-400/70" />
@@ -41,7 +46,7 @@ export function SourceCitationPanel({ citations, className }: Props) {
         )}
       </div>
 
-      {/* Citation list */}
+      {/* ── Citation list ── */}
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 custom-scrollbar">
         <AnimatePresence mode="popLayout">
           {citations.length === 0 ? (
@@ -63,8 +68,18 @@ export function SourceCitationPanel({ citations, className }: Props) {
             </motion.div>
           ) : (
             citations.map((c, i) => {
-              const conf = confidenceLabel(c.relevanceScore);
+              const { label, color, bg } = scoreLabel(c.relevanceScore);
               const accent = accentColor(c.relevanceScore);
+
+              // Location: show real page number if present, chunk index otherwise.
+              // Never fabricate a page number — chunk index is the honest fallback.
+              const locationLabel =
+                c.pageNumber !== undefined
+                  ? `p. ${c.pageNumber}`
+                  : c.chunkIndex !== undefined
+                  ? `chunk ${c.chunkIndex}`
+                  : undefined;
+
               return (
                 <motion.div
                   key={c.chunkId}
@@ -74,24 +89,26 @@ export function SourceCitationPanel({ citations, className }: Props) {
                   transition={{ delay: i * 0.06, duration: 0.28 }}
                 >
                   <div
-                    className="relative rounded-2xl overflow-hidden border border-white/8 bg-white/2 hover:bg-white/4 transition-colors duration-200 group"
+                    className="relative rounded-2xl overflow-hidden border border-white/8 bg-white/[0.02] hover:bg-white/[0.035] transition-colors duration-200"
                     style={{ borderLeft: `2px solid ${accent}` }}
                   >
-                    {/* Top row */}
-                    <div className="flex items-start justify-between gap-2 px-3.5 pt-3 pb-1.5">
+                    {/* ── Title row ── */}
+                    <div className="flex items-start justify-between gap-2 px-3.5 pt-3 pb-1">
                       <div className="flex items-center gap-1.5 min-w-0">
-                        <Fingerprint className="w-3 h-3 flex-shrink-0" style={{ color: accent }} />
+                        <Layers
+                          className="w-3 h-3 flex-shrink-0"
+                          style={{ color: accent }}
+                        />
                         <span className="text-[11px] font-semibold text-white/80 truncate">
                           {c.documentTitle}
                         </span>
                       </div>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
-                        {/* Confidence badge */}
                         <span
                           className="text-[8px] font-mono font-bold px-1.5 py-0.5 rounded"
-                          style={{ color: conf.color, background: conf.bg }}
+                          style={{ color, background: bg }}
                         >
-                          {conf.label}
+                          {label}
                         </span>
                         {c.sourceUrl && (
                           <a
@@ -106,22 +123,31 @@ export function SourceCitationPanel({ citations, className }: Props) {
                       </div>
                     </div>
 
-                    {/* Meta */}
-                    <div className="flex items-center gap-2 px-3.5 pb-1.5">
-                      {c.pageNumber && (
-                        <div className="flex items-center gap-1 text-[9px] text-white/30">
-                          <Hash className="w-2 h-2" />
-                          <span>p.{c.pageNumber}</span>
-                        </div>
+                    {/* ── Meta: file type badge · file name · location ── */}
+                    <div className="flex items-center gap-1.5 px-3.5 pb-1.5 flex-wrap">
+                      {c.fileType && (
+                        <span className="text-[8px] font-mono font-bold px-1.5 py-0.5 rounded
+                          bg-cyan-500/10 border border-cyan-400/20 text-cyan-400/80 uppercase">
+                          {c.fileType}
+                        </span>
                       )}
                       {c.fileName && (
-                        <span className="text-[9px] font-mono text-white/25 truncate max-w-[110px]">
+                        <span className="text-[9px] font-mono text-white/30 truncate max-w-[100px]">
                           {c.fileName}
                         </span>
                       )}
-                      {/* Relevance bar */}
-                      <div className="ml-auto flex items-center gap-1.5">
-                        <div className="w-14 h-1 rounded-full bg-white/8 overflow-hidden">
+                      {locationLabel && (
+                        <div className="flex items-center gap-0.5 text-[9px] text-white/25">
+                          <Hash className="w-2.5 h-2.5" />
+                          <span>{locationLabel}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* ── Relevance bar + hybrid sub-scores ── */}
+                    <div className="px-3.5 pb-2">
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 h-0.5 rounded-full bg-white/8 overflow-hidden">
                           <motion.div
                             className="h-full rounded-full"
                             style={{ background: accent }}
@@ -130,19 +156,37 @@ export function SourceCitationPanel({ citations, className }: Props) {
                             transition={{ duration: 0.6, delay: i * 0.08 }}
                           />
                         </div>
-                        <span className="text-[9px] text-white/30 font-mono">
+                        <span className="text-[9px] text-white/35 font-mono flex-shrink-0">
                           {(c.relevanceScore * 100).toFixed(0)}%
                         </span>
                       </div>
+
+                      {/* Vector / keyword sub-score breakdown */}
+                      {(c.vectorScore !== undefined || c.keywordScore !== undefined) && (
+                        <div className="flex items-center gap-3 mt-1">
+                          {c.vectorScore !== undefined && (
+                            <span className="text-[8px] font-mono text-white/20">
+                              <span className="text-cyan-400/50">vec</span>
+                              {' '}{(c.vectorScore * 100).toFixed(0)}%
+                            </span>
+                          )}
+                          {c.keywordScore !== undefined && (
+                            <span className="text-[8px] font-mono text-white/20">
+                              <span className="text-violet-400/50">key</span>
+                              {' '}{(c.keywordScore * 100).toFixed(0)}%
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
 
-                    {/* Quoted text */}
+                    {/* ── Quoted text snippet ── */}
                     <div className="px-3.5 pb-3">
                       <blockquote
-                        className="text-[10px] leading-relaxed text-white/45 italic border-l pl-2 py-0.5"
-                        style={{ borderColor: `${accent}35` }}
+                        className="text-[10px] leading-relaxed text-white/45 italic border-l-2 pl-2.5 py-0.5"
+                        style={{ borderColor: `${accent}40` }}
                       >
-                        &ldquo;{c.quotedText.length > 200 ? c.quotedText.slice(0, 200) + '…' : c.quotedText}&rdquo;
+                        &ldquo;{c.quotedText}&rdquo;
                       </blockquote>
                     </div>
                   </div>

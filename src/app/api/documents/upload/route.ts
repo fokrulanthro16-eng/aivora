@@ -6,6 +6,7 @@ import { extractMetadata } from '@/lib/documents/metadata/extract-metadata';
 import { embedBatch } from '@/lib/ai/embeddings/local-embedder';
 import { parsePdf } from '@/lib/documents/parsers/pdf-parser';
 import { parseDocx } from '@/lib/documents/parsers/docx-parser';
+import { parseImage } from '@/lib/documents/parsers/image-parser';
 import type { DocumentChunkInsert, SourceType } from '@/lib/types/document';
 
 export const runtime = 'nodejs';
@@ -16,11 +17,17 @@ export const maxDuration = 120;
 const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
 
 const ALLOWED_EXT: Record<string, SourceType> = {
-  '.txt': 'txt',
-  '.md': 'markdown',
-  '.pdf': 'pdf',
+  '.txt':  'txt',
+  '.md':   'markdown',
+  '.pdf':  'pdf',
   '.docx': 'docx',
+  '.png':  'image',
+  '.jpg':  'image',
+  '.jpeg': 'image',
+  '.webp': 'image',
 };
+
+const VIDEO_EXT = new Set(['.mp4', '.webm', '.mov', '.avi', '.mkv']);
 
 const LegacyBodySchema = z.object({
   title: z.string().min(1).max(500),
@@ -132,9 +139,16 @@ async function handlePost(request: Request): Promise<Response> {
     const dotIdx = fileName.lastIndexOf('.');
     const ext = dotIdx >= 0 ? fileName.slice(dotIdx).toLowerCase() : '';
 
+    if (VIDEO_EXT.has(ext)) {
+      return err(
+        'Video ingestion requires transcript extraction. Please upload a transcript .txt or .md for now.',
+        415,
+      );
+    }
+
     if (!(ext in ALLOWED_EXT)) {
       return err(
-        `Unsupported file type "${ext || '(none)'}". Allowed: .txt .md .pdf .docx`,
+        `Unsupported file type "${ext || '(none)'}". Allowed: .txt .md .pdf .docx .png .jpg .jpeg .webp`,
         415,
       );
     }
@@ -156,18 +170,22 @@ async function handlePost(request: Request): Promise<Response> {
         rawText = await parsePdf(buffer);
       } else if (ext === '.docx') {
         rawText = await parseDocx(buffer);
+      } else if (sourceType === 'image') {
+        rawText = await parseImage(buffer); // throws with user-friendly message if no text
       } else {
         rawText = buffer.toString('utf-8');
       }
     } catch (parseErr) {
       const msg = parseErr instanceof Error ? parseErr.message : 'Extraction failed';
-      return err(`Failed to extract text from file: ${msg}`, 422);
+      // parseImage already gives a clear message; wrap others
+      return err(sourceType === 'image' ? msg : `Failed to extract text from file: ${msg}`, 422);
     }
 
     if (!rawText || rawText.trim().length < 10) {
       return err(
-        'Extracted text is empty or too short. ' +
-          'The file may be image-only, password-protected, or corrupt.',
+        sourceType === 'image'
+          ? 'No readable text found in this image.'
+          : 'Extracted text is empty or too short. The file may be image-only, password-protected, or corrupt.',
         422,
       );
     }

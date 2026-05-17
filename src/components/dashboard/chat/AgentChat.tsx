@@ -37,6 +37,8 @@ type AgentChatProps = {
   onModeChange: (mode: SystemMode) => void;
   onAnalyticsChange: (analytics: AgentAnalytics) => void;
   onLocalAIReady?: () => void;
+  externalQuery?: { query: string; documentId?: string } | null;
+  onExternalQueryConsumed?: () => void;
   className?: string;
 };
 
@@ -73,6 +75,8 @@ export function AgentChat({
   onModeChange,
   onAnalyticsChange,
   onLocalAIReady,
+  externalQuery,
+  onExternalQueryConsumed,
   className,
 }: AgentChatProps) {
   const [mounted, setMounted] = useState(false);
@@ -84,6 +88,8 @@ export function AgentChat({
   const [webllmProgress, setWebllmProgress] = useState<{ p: number; text: string } | null>(null);
   const [memoryCount, setMemoryCount] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
+  // Stable ref to handleSubmit so the externalQuery effect always calls the latest version.
+  const handleSubmitRef = useRef<(overrideQuery?: string, overrideFilterDocIds?: string[]) => Promise<void>>(async () => {});
 
   // Set mounted after first client render so browser-only APIs are never called during SSR.
   useEffect(() => { void Promise.resolve(true).then(setMounted); }, []);
@@ -123,8 +129,8 @@ export function AgentChat({
     }
   }, [onLocalAIReady]);
 
-  const handleSubmit = async () => {
-    const query = input.trim();
+  const handleSubmit = async (overrideQuery?: string, overrideFilterDocIds?: string[]) => {
+    const query = (overrideQuery ?? input).trim();
     if (!query || isLoading || webllmLoading) return;
 
     const t0 = Date.now();
@@ -136,7 +142,7 @@ export function AgentChat({
     };
 
     setMessages((prev) => [...prev, userMsg]);
-    setInput('');
+    if (!overrideQuery) setInput('');
     setIsLoading(true);
     onPhaseChange('plan');
     onCitationsChange([]);
@@ -162,7 +168,10 @@ export function AgentChat({
       const response = await fetch('/api/agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({
+          query,
+          ...(overrideFilterDocIds?.length ? { filters: { documentIds: overrideFilterDocIds } } : {}),
+        }),
       });
 
       clearInterval(phaseTimer);
@@ -328,6 +337,19 @@ export function AgentChat({
       setIsLoading(false);
     }
   };
+
+  // Keep ref current so the externalQuery effect always invokes the latest closure.
+  useEffect(() => { handleSubmitRef.current = handleSubmit; });
+
+  useEffect(() => {
+    if (!externalQuery) return;
+    onExternalQueryConsumed?.();
+    void handleSubmitRef.current(
+      externalQuery.query,
+      externalQuery.documentId ? [externalQuery.documentId] : undefined,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalQuery]);
 
   const handleClearMemory = async () => {
     await clearLocalMemory();
@@ -580,7 +602,7 @@ export function AgentChat({
             style={{ minHeight: 44, maxHeight: 120 }}
           />
           <button
-            onClick={handleSubmit}
+            onClick={() => void handleSubmit()}
             disabled={!input.trim() || isLoading || webllmLoading}
             className={cn(
               'flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center',

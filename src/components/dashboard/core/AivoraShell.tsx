@@ -117,6 +117,7 @@ export function AivoraShell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [webgpuAvailable, setWebgpuAvailable] = useState(false);
   const [webllmReady, setWebllmReady] = useState(false);
+  const [vaultAction, setVaultAction] = useState<{ query: string; documentId?: string } | null>(null);
 
   const supabaseConnected = !!(
     process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -337,6 +338,8 @@ export function AivoraShell() {
           onModeChange={setSystemMode}
           onAnalyticsChange={setAnalytics}
           onLocalAIReady={() => setWebllmReady(true)}
+          externalQuery={vaultAction}
+          onExternalQueryConsumed={() => setVaultAction(null)}
           className="flex-1 min-w-0"
         />
 
@@ -402,10 +405,13 @@ export function AivoraShell() {
               />
             )}
             {rightTab === 'graph' && (
-              <AgentGraph phase={phase} systemMode={systemMode} className="h-full" />
+              <AgentGraph phase={phase} systemMode={systemMode} citations={citations} className="h-full" />
             )}
             {rightTab === 'vault' && (
-              <KnowledgeVaultPanel className="h-full" />
+              <KnowledgeVaultPanel
+                className="h-full"
+                onAction={(query, documentId) => setVaultAction({ query, documentId })}
+              />
             )}
           </div>
         </div>

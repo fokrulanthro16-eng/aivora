@@ -1,4 +1,4 @@
-export type SourceType = 'pdf' | 'docx' | 'txt' | 'html' | 'markdown' | 'url' | 'manual';
+export type SourceType = 'pdf' | 'docx' | 'txt' | 'html' | 'markdown' | 'url' | 'manual' | 'image';
 
 export type Document = {
   id: string;
@@ -29,6 +29,7 @@ export type DocumentChunkInsert = Omit<DocumentChunk, 'id' | 'created_at'>;
 export type HybridSearchResult = {
   chunk_id: string;
   document_id: string;
+  chunk_index?: number;
   content: string;
   title: string;
   source_url: string | null;
