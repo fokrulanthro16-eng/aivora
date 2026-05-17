@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils/cn';
 type UploadState =
   | { status: 'idle' }
   | { status: 'uploading' }
-  | { status: 'success'; fileName: string; fileType: string; chunkCount: number }
+  | { status: 'success'; fileName: string; fileType: string; chunksInserted: number }
   | { status: 'error'; message: string };
 
 const FILE_TYPE_LABEL: Record<string, string> = {
@@ -38,27 +38,36 @@ export function KnowledgeVaultPanel({ className }: Props) {
 
     try {
       const res = await fetch('/api/documents/upload', { method: 'POST', body: form });
-      const data = (await res.json()) as {
-        error?: string;
-        fileName?: string;
-        fileType?: string;
-        chunkCount?: number;
-      };
 
-      if (!res.ok) {
-        setResult({ status: 'error', message: data.error ?? 'Upload failed.' });
+      // Parse the response body — always JSON from this API, but guard against HTML error pages.
+      let data: { ok?: boolean; error?: string; fileName?: string; fileType?: string; chunksInserted?: number };
+      try {
+        data = (await res.json()) as typeof data;
+      } catch {
+        const text = await res.text().catch(() => '');
+        setResult({
+          status: 'error',
+          message: text ? `Server error: ${text.slice(0, 200)}` : `HTTP ${res.status} — unexpected response format`,
+        });
+        return;
+      }
+
+      if (!res.ok || data.ok === false) {
+        setResult({ status: 'error', message: data.error ?? `Upload failed (HTTP ${res.status}).` });
       } else {
         setResult({
           status: 'success',
           fileName: data.fileName ?? file.name,
           fileType: data.fileType ?? 'txt',
-          chunkCount: data.chunkCount ?? 0,
+          chunksInserted: data.chunksInserted ?? 0,
         });
         setTitle('');
         if (fileRef.current) fileRef.current.value = '';
       }
-    } catch {
-      setResult({ status: 'error', message: 'Network error — please try again.' });
+    } catch (fetchErr) {
+      // Only reached when fetch() itself throws (no network, connection refused, etc.)
+      const msg = fetchErr instanceof Error ? fetchErr.message : 'Network error';
+      setResult({ status: 'error', message: `Network error — ${msg}. Is the dev server running?` });
     }
   }
 
@@ -169,7 +178,7 @@ export function KnowledgeVaultPanel({ className }: Props) {
                     {FILE_TYPE_LABEL[result.fileType] ?? result.fileType.toUpperCase()}
                   </span>
                   {' · '}
-                  {result.chunkCount} chunk{result.chunkCount !== 1 ? 's' : ''} inserted
+                  {result.chunksInserted} chunk{result.chunksInserted !== 1 ? 's' : ''} inserted
                 </p>
                 <p className="text-white/25 text-[10px] mt-1.5 leading-snug italic">
                   Now ask Aivora about this document.

@@ -6,7 +6,7 @@ import { Upload, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
 type UploadResult =
   | { status: 'idle' }
   | { status: 'uploading' }
-  | { status: 'success'; fileName: string; fileType: string; chunkCount: number }
+  | { status: 'success'; fileName: string; fileType: string; chunksInserted: number }
   | { status: 'error'; message: string };
 
 const ACCEPT = '.txt,.md,.pdf,.docx';
@@ -36,27 +36,34 @@ export default function AdminDocumentsPage() {
 
     try {
       const res = await fetch('/api/documents/upload', { method: 'POST', body: form });
-      const data = (await res.json()) as {
-        error?: string;
-        fileName?: string;
-        fileType?: string;
-        chunkCount?: number;
-      };
 
-      if (!res.ok) {
-        setResult({ status: 'error', message: data.error ?? 'Upload failed.' });
+      let data: { ok?: boolean; error?: string; fileName?: string; fileType?: string; chunksInserted?: number };
+      try {
+        data = (await res.json()) as typeof data;
+      } catch {
+        const text = await res.text().catch(() => '');
+        setResult({
+          status: 'error',
+          message: text ? `Server error: ${text.slice(0, 200)}` : `HTTP ${res.status} — unexpected response`,
+        });
+        return;
+      }
+
+      if (!res.ok || data.ok === false) {
+        setResult({ status: 'error', message: data.error ?? `Upload failed (HTTP ${res.status}).` });
       } else {
         setResult({
           status: 'success',
           fileName: data.fileName ?? file.name,
           fileType: data.fileType ?? 'txt',
-          chunkCount: data.chunkCount ?? 0,
+          chunksInserted: data.chunksInserted ?? 0,
         });
         setTitle('');
         if (fileRef.current) fileRef.current.value = '';
       }
-    } catch {
-      setResult({ status: 'error', message: 'Network error — please try again.' });
+    } catch (fetchErr) {
+      const msg = fetchErr instanceof Error ? fetchErr.message : 'Network error';
+      setResult({ status: 'error', message: `Network error — ${msg}` });
     }
   }
 
@@ -152,7 +159,7 @@ export default function AdminDocumentsPage() {
                   {FILE_TYPE_LABEL[result.fileType] ?? result.fileType}
                 </span>
                 &nbsp;·&nbsp;
-                {result.chunkCount} chunk{result.chunkCount !== 1 ? 's' : ''} inserted
+                {result.chunksInserted} chunk{result.chunksInserted !== 1 ? 's' : ''} inserted
               </p>
             </div>
           </div>

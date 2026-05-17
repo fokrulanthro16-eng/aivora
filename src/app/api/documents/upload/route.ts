@@ -10,6 +10,9 @@ import type { DocumentChunkInsert, SourceType } from '@/lib/types/document';
 
 export const runtime = 'nodejs';
 
+// Give the embedder time to initialise on first request.
+export const maxDuration = 120;
+
 const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
 
 const ALLOWED_EXT: Record<string, SourceType> = {
@@ -29,7 +32,14 @@ const LegacyBodySchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
-// ── Shared ingestion pipeline ─────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function err(message: string, status = 400): Response {
+  console.error('[/api/documents/upload]', message);
+  return Response.json({ ok: false, error: message }, { status });
+}
+
+// ── Shared ingestion pipeline ──────────────────────────────────────────────────
 
 async function ingestText(
   rawText: string,
@@ -41,7 +51,7 @@ async function ingestText(
     tags?: string[];
     metadata?: Record<string, unknown>;
   },
-): Promise<{ documentId: string; chunkCount: number }> {
+): Promise<{ documentId: string; chunksInserted: number }> {
   const parsedDoc = parseTextContent(rawText);
   const docMeta = extractMetadata(parsedDoc.content, {
     title: opts.title,
@@ -72,30 +82,50 @@ async function ingestText(
   }));
 
   await insertChunks(chunkRows);
-  return { documentId, chunkCount: chunkRows.length };
+  return { documentId, chunksInserted: chunkRows.length };
 }
 
-// ── Route handler ─────────────────────────────────────────────────────────────
+// ── Route handler ──────────────────────────────────────────────────────────────
 
 export async function POST(request: Request): Promise<Response> {
-  const contentType = request.headers.get('content-type') ?? '';
+  try {
+    return await handlePost(request);
+  } catch (fatal) {
+    const msg = fatal instanceof Error ? fatal.message : 'Unexpected server error';
+    console.error('[/api/documents/upload] Unhandled:', msg);
+    return Response.json({ ok: false, error: msg }, { status: 500 });
+  }
+}
 
-  // ── File upload (multipart/form-data) ─────────────────────────────────────
-  if (contentType.includes('multipart/form-data')) {
-    let form: FormData;
-    try {
+async function handlePost(request: Request): Promise<Response> {
+  // ── Try multipart first (file upload) ─────────────────────────────────────
+  // Attempt formData() regardless of the Content-Type header value so that
+  // browser quirks with boundary formatting never silently fall through to the
+  // JSON branch.
+  let form: FormData | null = null;
+  try {
+    const ct = request.headers.get('content-type') ?? '';
+    if (ct.includes('multipart/form-data') || ct.includes('form-data')) {
       form = await request.formData();
-    } catch {
-      return Response.json({ error: 'Invalid form data.' }, { status: 400 });
     }
+  } catch {
+    // Content-Type was multipart but formData() failed — propagate the error.
+    return err('Could not parse multipart form data.');
+  }
 
+  if (form !== null) {
+    // ── File upload path ────────────────────────────────────────────────────
     const file = form.get('file');
     if (!(file instanceof File)) {
-      return Response.json({ error: 'No file provided.' }, { status: 400 });
+      return err('No file provided.');
+    }
+
+    if (file.size === 0) {
+      return err('The selected file is empty.');
     }
 
     if (file.size > MAX_FILE_BYTES) {
-      return Response.json({ error: 'File exceeds 10 MB limit.' }, { status: 413 });
+      return err('File exceeds the 10 MB limit.', 413);
     }
 
     const fileName = file.name;
@@ -103,19 +133,24 @@ export async function POST(request: Request): Promise<Response> {
     const ext = dotIdx >= 0 ? fileName.slice(dotIdx).toLowerCase() : '';
 
     if (!(ext in ALLOWED_EXT)) {
-      return Response.json(
-        { error: `Unsupported file type "${ext || '(none)'}". Allowed: .txt .md .pdf .docx` },
-        { status: 415 },
+      return err(
+        `Unsupported file type "${ext || '(none)'}". Allowed: .txt .md .pdf .docx`,
+        415,
       );
     }
 
     const sourceType = ALLOWED_EXT[ext]!;
     const titleFromForm = (form.get('title') as string | null)?.trim();
-    const title = titleFromForm || (dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName);
+    const documentTitle = titleFromForm || (dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName);
 
-    const buffer = Buffer.from(await file.arrayBuffer());
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(await file.arrayBuffer());
+    } catch {
+      return err('Failed to read file bytes — the file may be corrupt.');
+    }
+
     let rawText: string;
-
     try {
       if (ext === '.pdf') {
         rawText = await parsePdf(buffer);
@@ -124,36 +159,32 @@ export async function POST(request: Request): Promise<Response> {
       } else {
         rawText = buffer.toString('utf-8');
       }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Extraction failed';
-      return Response.json({ error: `Failed to parse file: ${msg}` }, { status: 422 });
+    } catch (parseErr) {
+      const msg = parseErr instanceof Error ? parseErr.message : 'Extraction failed';
+      return err(`Failed to extract text from file: ${msg}`, 422);
     }
 
-    if (rawText.trim().length < 10) {
-      return Response.json(
-        {
-          error:
-            'Extracted text is empty or too short. ' +
-            'The file may be image-only, password-protected, or corrupt.',
-        },
-        { status: 422 },
+    if (!rawText || rawText.trim().length < 10) {
+      return err(
+        'Extracted text is empty or too short. ' +
+          'The file may be image-only, password-protected, or corrupt.',
+        422,
       );
     }
 
     try {
-      const { documentId, chunkCount } = await ingestText(rawText, {
-        title,
+      const { chunksInserted } = await ingestText(rawText, {
+        title: documentTitle,
         source_type: sourceType,
         file_name: fileName,
       });
       return Response.json(
-        { success: true, documentId, chunkCount, fileType: sourceType, fileName },
+        { ok: true, documentTitle, fileName, fileType: sourceType, chunksInserted },
         { status: 201 },
       );
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Ingestion failed';
-      console.error('[/api/documents/upload] file path:', msg);
-      return Response.json({ error: msg }, { status: 500 });
+    } catch (ingestErr) {
+      const msg = ingestErr instanceof Error ? ingestErr.message : 'Indexing failed';
+      return err(msg, 500);
     }
   }
 
@@ -162,13 +193,13 @@ export async function POST(request: Request): Promise<Response> {
   try {
     body = await request.json();
   } catch {
-    return Response.json({ error: 'Invalid JSON body.' }, { status: 400 });
+    return err('Invalid request body — expected multipart/form-data or JSON.');
   }
 
   const parsed = LegacyBodySchema.safeParse(body);
   if (!parsed.success) {
     return Response.json(
-      { error: 'Validation failed.', details: parsed.error.flatten() },
+      { ok: false, error: 'Validation failed.', details: parsed.error.flatten() },
       { status: 422 },
     );
   }
@@ -176,7 +207,7 @@ export async function POST(request: Request): Promise<Response> {
   const { title, content, source_type, source_url, file_name, tags, metadata } = parsed.data;
 
   try {
-    const { documentId, chunkCount } = await ingestText(content, {
+    const { chunksInserted } = await ingestText(content, {
       title,
       source_type: source_type ?? null,
       source_url: source_url ?? null,
@@ -184,10 +215,12 @@ export async function POST(request: Request): Promise<Response> {
       tags,
       metadata,
     });
-    return Response.json({ success: true, documentId, chunkCount }, { status: 201 });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Upload failed';
-    console.error('[/api/documents/upload]', message);
-    return Response.json({ error: message }, { status: 500 });
+    return Response.json(
+      { ok: true, documentTitle: title, fileName: file_name ?? null, fileType: source_type ?? 'txt', chunksInserted },
+      { status: 201 },
+    );
+  } catch (ingestErr) {
+    const msg = ingestErr instanceof Error ? ingestErr.message : 'Upload failed';
+    return err(msg, 500);
   }
 }

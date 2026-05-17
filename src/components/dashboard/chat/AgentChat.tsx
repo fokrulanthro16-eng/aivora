@@ -168,8 +168,15 @@ export function AgentChat({
       clearInterval(phaseTimer);
 
       if (!response.ok) {
-        const errData = await response.json() as { error?: string };
-        throw new Error(errData.error ?? `HTTP ${response.status}`);
+        let errMessage = `HTTP ${response.status}`;
+        try {
+          const errData = await response.json() as { error?: string };
+          if (errData.error) errMessage = errData.error;
+        } catch {
+          const text = await response.text().catch(() => '');
+          if (text) errMessage = text.slice(0, 300);
+        }
+        throw new Error(errMessage);
       }
 
       const data = await response.json() as AivoraAgentResponse;
