@@ -854,16 +854,25 @@ function detectStudioWorkflow(query: string): StudioWorkflow | null {
   const lc = query.toLowerCase();
   if (lc.includes('generate a complete study pack')) return 'study-pack';
   if (lc.includes('extract all action items')) return 'action-items';
-  if (lc.includes('10-slide presentation outline')) return 'presentation';
+  if (
+    lc.includes('10-slide presentation outline') ||
+    lc.includes('pptx-ready presentation') ||
+    lc.includes('create presentation outline') ||
+    lc.includes('speaker notes') && lc.includes('suggested visual')
+  ) return 'presentation';
   if (lc.includes('create a blog post')) return 'blog-post';
   if (lc.includes('create a linkedin post')) return 'linkedin';
   if (lc.includes('generate a github readme')) return 'github-readme';
   if (lc.includes('graphical report with key statistics')) return 'graphical-report';
   if (lc.includes('summarize this transcript')) return 'transcript-summary';
-  if (lc.includes('create a scene breakdown')) return 'scene-breakdown';
-  if (lc.includes('video script with hook')) return 'video-script';
-  if (lc.includes('storyboard with scene number')) return 'storyboard';
-  if (lc.includes('video intelligence report')) return 'video-intel';
+  if (lc.includes('create a scene breakdown') || lc.includes('scene breakdown from this')) return 'scene-breakdown';
+  if (
+    lc.includes('video script with hook') ||
+    lc.includes('short-form script') ||
+    lc.includes('long-form script')
+  ) return 'video-script';
+  if (lc.includes('storyboard with scene number') || lc.includes('storyboard for this')) return 'storyboard';
+  if (lc.includes('video intelligence report') || lc.includes('media intelligence')) return 'video-intel';
   if (lc.includes('build a knowledge graph')) return 'knowledge-graph';
   return null;
 }
@@ -895,6 +904,103 @@ function studioHeadings(chunks: HybridSearchResult[]): string[] {
   return chunks
     .flatMap((c) => c.content.split('\n').filter((l) => /^#{1,3}\s/.test(l)).map((l) => l.replace(/^#+\s+/, '').trim()))
     .filter(Boolean);
+}
+
+/**
+ * Strip OCR garbage, bare page/index numbers, table-separator rows, and very
+ * short noise lines before extracting sentences for structured outputs.
+ */
+function cleanChunkContent(raw: string): string {
+  return raw
+    .split('\n')
+    .filter((l) => {
+      const t = l.trim();
+      if (!t) return false;
+      if (/^\d+$/.test(t)) return false;                          // bare page / index numbers
+      if (/^[\d\s|.,:\-–—]{1,50}$/.test(t)) return false;        // table separators / OCR rows
+      if (t.length < 12 && !/^#{1,3}\s/.test(t)) return false;   // micro-fragments
+      const digitRatio = (t.match(/\d/g) ?? []).length / t.length;
+      if (digitRatio > 0.45 && t.length < 60) return false;      // >45% digits = numeric garbage
+      return true;
+    })
+    .join('\n')
+    .replace(/[ \t]{3,}/g, '  ')
+    .trim();
+}
+
+/**
+ * Sentence extractor that runs cleanChunkContent first — filters OCR garbage,
+ * repeated numbers, and broken fragments before yielding usable sentences.
+ * Use this instead of studioSentences for presentation / video outputs.
+ */
+function cleanSentences(
+  chunks: HybridSearchResult[],
+  pattern?: RegExp,
+  max = 6,
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const c of chunks) {
+    const cleaned = cleanChunkContent(c.content)
+      .replace(/^#{1,6}\s+.+$/gm, '');
+    for (const s of cleaned.split(/(?<=[.!?])\s+/).map((x) => x.trim())) {
+      if (s.length < 30) continue;
+      if (/^\d[\d\s.,]*$/.test(s)) continue;                     // pure numeric
+      if ((s.match(/\d/g) ?? []).length > s.length * 0.4) continue; // too many digits
+      const norm = s.replace(/\*\*(.+?)\*\*/g, '$1');
+      if ((!pattern || pattern.test(norm)) && !seen.has(norm)) {
+        seen.add(norm);
+        out.push(norm);
+        if (out.length >= max) return out;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Returns a specific, content-aware visual suggestion for a given slide/scene
+ * context — avoids generic "[Diagram illustrating Section N]" placeholders.
+ */
+function presentationVisual(
+  context: string,
+  persons: string[],
+  places: string[],
+  years: string[],
+): string {
+  const lc = context.toLowerCase();
+  if (/title|introduction|overview/.test(lc))
+    return `Title card with document name and key subtitle`;
+  if (/background|context|histor|origin|found|colonial|ancient/.test(lc))
+    return years.length > 0
+      ? `Historical timeline from ${years[0]} to ${years[years.length - 1]}`
+      : `Context map or historical background graphic`;
+  if (/timeline|chronolog|process|phase|stage|step/.test(lc))
+    return years.length > 2
+      ? `Chronological timeline: ${years.slice(0, 4).join(' → ')}`
+      : `Process flowchart showing sequence of events`;
+  if (/people|person|leader|figure|who|key figure|portrait/.test(lc))
+    return persons.length > 0
+      ? `Portrait or role cards featuring ${persons.slice(0, 3).join(', ')}`
+      : `Key figures gallery with names and roles`;
+  if (/place|location|region|geography|map|where/.test(lc))
+    return places.length > 0
+      ? `Map highlighting ${places.slice(0, 3).join(', ')}`
+      : `Geographic reference map`;
+  if (/evidence|source|data|statistic|number|finding|fact/.test(lc))
+    return `Data table or bar chart drawn from source material`;
+  if (/implication|lesson|impact|consequence|result|outcome|mean/.test(lc))
+    return `Cause-and-effect diagram or lessons-learned framework`;
+  if (/summary|conclusion|q&a|final|wrap/.test(lc))
+    return `Key takeaways card — three bullet points with call to action`;
+  if (/scene|segment|clip|moment/.test(lc))
+    return places.length > 0
+      ? `Establishing shot: ${places[0]}`
+      : `Contextual scene graphic or B-roll suggestion`;
+  // Fallback: use first available entity for specificity
+  if (persons.length > 0) return `Graphic featuring ${persons[0]} in context`;
+  if (places.length > 0) return `Visual of ${places[0]} or related location`;
+  return `Illustrative graphic supporting "${context.slice(0, 60)}"`;
 }
 
 function buildStudyPack(chunks: HybridSearchResult[]): string {
@@ -967,33 +1073,141 @@ function buildActionItems(chunks: HybridSearchResult[]): string {
 
 function buildPresentation(chunks: HybridSearchResult[]): string {
   const docTitle = chunks[0]?.title ?? 'Document';
-  const slideCount = Math.min(chunks.length + 2, 10);
+  const persons = mdocNames(chunks);
+  const places  = mdocPlaces(chunks);
+  const years   = mdocYears(chunks);
+  const yearRx  = /\b(1[0-9]{3}|20[0-2][0-9])\b/;
+  const src     = `_Source: ${docTitle}_`;
 
-  const slideFromChunk = (c: HybridSearchResult, slideNum: number): string => {
-    const heading = c.content.split('\n').find((l) => /^#{1,3}\s/.test(l))?.replace(/^#+\s+/, '') ?? `Section ${slideNum}`;
-    const bullets = c.content.replace(/^#{1,6}\s+.+$/gm, '')
-      .split(/(?<=[.!?])\s+/).filter((s) => s.length > 30).slice(0, 3)
-      .map((s) => `- ${s.replace(/\*\*(.+?)\*\*/g, '$1').trim().slice(0, 130)}`).join('\n');
-    const note = c.content.split(/(?<=[.!?])\s+/).find((s) => s.length > 50) ?? '';
-    return (
-      `## Slide ${slideNum}: ${heading}\n**Bullets:**\n${bullets || studioNF()}\n\n` +
-      `**Speaker Notes:** ${note.replace(/\*\*(.+?)\*\*/g, '$1').trim().slice(0, 200) || studioNF()}\n\n` +
-      `**Suggested Visual:** [Diagram or image illustrating "${heading}"]`
-    );
-  };
+  // Headings extracted from chunks — use as theme names, skip bare numbers
+  const headings = studioHeadings(chunks).filter((h) => h.length > 4 && !/^\d+$/.test(h));
 
-  const intro = studioSentences(chunks.slice(0, 1), undefined, 3).map((s) => `- ${s.slice(0, 150)}`).join('\n');
-  const conclusion = studioSentences(chunks.slice(-2), undefined, 3).map((s) => `- ${s.slice(0, 150)}`).join('\n');
-  const midSlides = chunks.slice(0, slideCount - 2).map((c, i) => slideFromChunk(c, i + 2));
+  function makeSlide(
+    num: number,
+    title: string,
+    sents: string[],
+    notes: string,
+    visual: string,
+  ): string {
+    const bullets = sents.length > 0
+      ? sents.slice(0, 5).map((s) => `- ${s.slice(0, 160)}`).join('\n')
+      : studioNF();
+    return [
+      `## Slide ${num}: ${title}`,
+      `**Bullets:**`,
+      bullets,
+      ``,
+      `**Speaker Notes:** ${notes}`,
+      `**Suggested Visual:** ${visual}`,
+      `**Source:** ${src}`,
+    ].join('\n');
+  }
+
+  // Sentence pools for each slide — all cleaned before use
+  const intro        = cleanSentences(chunks.slice(0, 2), undefined, 5);
+  const bgSents      = cleanSentences(chunks, /background|context|histor|origin|found|earliest|ancient|colonial|period/i, 4);
+  const theme1Sents  = cleanSentences(chunks.slice(0, 3), undefined, 5);
+  const theme2Sents  = cleanSentences(chunks.slice(2, 5), undefined, 5);
+  const theme3Sents  = cleanSentences(chunks.slice(4, 7), undefined, 5);
+  const timelineSents = cleanSentences(chunks, yearRx, 5);
+  const peopleSents  = [
+    ...persons.slice(0, 3).map((p) => `Key figure: ${p}`),
+    ...places.slice(0, 2).map((p) => `Location: ${p}`),
+    ...cleanSentences(chunks, /leader|president|minister|general|poet|founder|figure|director/i, 3),
+  ].filter(Boolean).slice(0, 5);
+  const evidenceSents = cleanSentences(
+    chunks, /according|report|data|survey|shows|found|evidence|percent|million|billion/i, 5,
+  );
+  const implSents    = cleanSentences(
+    chunks, /implication|lesson|result|impact|consequence|therefore|thus|mean|led to|resulted/i, 5,
+  );
+  const summarySents = cleanSentences(chunks.slice(-3), undefined, 5);
+
+  const t1 = headings[0] ?? 'Main Theme A';
+  const t2 = headings[1] ?? 'Main Theme B';
+  const t3 = headings[2] ?? 'Main Theme C';
 
   return [
     `# Presentation Outline: ${docTitle}`,
-    `> **${slideCount} slides** from **${chunks.length}** retrieved chunks.`,
-    '',
-    `## Slide 1: Title & Overview\n**Title:** ${docTitle}\n**Bullets:**\n${intro || studioNF()}\n**Speaker Notes:** Welcome. Today we explore _${docTitle}_.\n**Suggested Visual:** [Title card with document name]`,
-    '',
-    ...midSlides.map((s) => s + '\n'),
-    `## Slide ${slideCount}: Conclusion & Q&A\n**Bullets:**\n${conclusion || studioNF()}\n**Speaker Notes:** Summary of key findings. Open for questions.\n**Suggested Visual:** [Summary diagram or key takeaway card]`,
+    `> **10 slides** · grounded in **${chunks.length}** retrieved chunks`,
+    ``,
+    makeSlide(
+      1, 'Introduction & Overview',
+      intro.length > 0 ? intro : [`An overview of ${docTitle}`],
+      `Welcome the audience. Introduce the topic: _${docTitle}_. State what the presentation will cover and why it matters.`,
+      presentationVisual('title introduction overview', persons, places, years),
+    ),
+    ``,
+    makeSlide(
+      2, 'Background & Context',
+      bgSents.length > 0 ? bgSents : intro.slice(0, 4),
+      `Set the scene. Explain the historical or contextual background essential to understanding this topic.`,
+      presentationVisual('background context history origin', persons, places, years),
+    ),
+    ``,
+    makeSlide(
+      3, t1,
+      theme1Sents,
+      `Present the first major theme. Use specific facts and quotes from the source to support each bullet point.`,
+      presentationVisual(t1, persons, places, years),
+    ),
+    ``,
+    makeSlide(
+      4, t2,
+      theme2Sents.length > 0 ? theme2Sents : theme1Sents,
+      `Explore the second theme. Show how it connects to or contrasts with what was just discussed.`,
+      presentationVisual(t2, persons, places, years),
+    ),
+    ``,
+    makeSlide(
+      5, t3,
+      theme3Sents.length > 0 ? theme3Sents : theme2Sents,
+      `Cover the third major theme. Highlight specific examples, data points, or events from the source.`,
+      presentationVisual(t3, persons, places, years),
+    ),
+    ``,
+    makeSlide(
+      6, 'Timeline & Key Events',
+      timelineSents.length > 0
+        ? timelineSents
+        : years.slice(0, 5).map((y) => `Events centred on ${y}`),
+      `Walk the audience through the chronology. Connect dates to outcomes and consequences.`,
+      years.length > 2
+        ? `Chronological timeline: ${years.slice(0, 5).join(' → ')}`
+        : `Flowchart of key stages and turning points`,
+    ),
+    ``,
+    makeSlide(
+      7, 'Key People, Places & Events',
+      peopleSents,
+      `Introduce the main actors and locations. Explain their roles and why they matter to this topic.`,
+      persons.length > 0
+        ? `Portrait gallery or role chart featuring ${persons.slice(0, 3).join(', ')}`
+        : places.length > 0
+          ? `Map showing ${places.slice(0, 3).join(', ')}`
+          : `Key figures and locations reference card`,
+    ),
+    ``,
+    makeSlide(
+      8, 'Evidence & Source Insights',
+      evidenceSents.length > 0 ? evidenceSents : intro.slice(0, 4),
+      `Present the strongest factual evidence. Reference the source directly. Let the data speak.`,
+      `Data table or infographic drawn from ${src}`,
+    ),
+    ``,
+    makeSlide(
+      9, 'Implications & Lessons',
+      implSents.length > 0 ? implSents : summarySents.slice(0, 4),
+      `Discuss what these findings mean. What can be learned, applied, or acted upon from this material?`,
+      `Cause-and-effect diagram or lessons-learned framework`,
+    ),
+    ``,
+    makeSlide(
+      10, 'Summary & Q&A',
+      summarySents.length > 0 ? summarySents : intro.slice(0, 4),
+      `Recap the three to five most important points. Invite questions. Thank the audience.`,
+      `Key takeaways card — three bullet points with call to action`,
+    ),
   ].join('\n');
 }
 
@@ -1150,107 +1364,295 @@ function buildTranscriptSummary(chunks: HybridSearchResult[]): string {
 }
 
 function buildSceneBreakdown(chunks: HybridSearchResult[]): string {
-  const docTitle = chunks[0]?.title ?? 'the document';
+  const docTitle   = chunks[0]?.title ?? 'the document';
+  const persons    = mdocNames(chunks);
+  const places     = mdocPlaces(chunks);
+  const years      = mdocYears(chunks);
+  const headings   = studioHeadings(chunks).filter((h) => h.length > 4 && !/^\d+$/.test(h));
   const sceneChunks = chunks.slice(0, 10);
 
   const sceneCards = sceneChunks.map((c, i) => {
-    const heading = c.content.split('\n').find((l) => /^#{1,3}\s/.test(l))?.replace(/^#+\s+/, '') ?? `Scene ${i + 1}`;
-    const narration = c.content.replace(/^#{1,6}\s+.+$/gm, '').split(/(?<=[.!?])\s+/).find((s) => s.length > 30) ?? '';
-    return (
-      `## Scene ${i + 1}: ${heading}\n` +
-      `**Visual Idea:** [Shot of ${heading} — wide/close-up depending on context]\n` +
-      `**Narration:** ${narration.replace(/\*\*(.+?)\*\*/g, '$1').trim().slice(0, 200) || studioNF()}\n` +
-      `**On-screen Text:** ${heading}\n` +
-      `**Source Note:** _${c.title}_`
-    );
-  });
-
-  return [`# Scene Breakdown: ${docTitle}`, '', ...sceneCards.map((s) => s + '\n')].join('\n');
-}
-
-function buildVideoScript(chunks: HybridSearchResult[]): string {
-  const docTitle = chunks[0]?.title ?? 'the document';
-  const allSentences = studioSentences(chunks, undefined, 12);
-  const hook = allSentences[0] ?? `Did you know about ${docTitle}?`;
-  const sceneNarrations = chunks.slice(0, 5).map((c, i) => {
-    const narration = c.content.replace(/^#{1,6}\s+.+$/gm, '').split(/(?<=[.!?])\s+/).filter((s) => s.length > 30).slice(0, 2).map((s) => s.replace(/\*\*(.+?)\*\*/g, '$1').trim()).join(' ');
-    return `### Scene ${i + 2}: ${c.content.split('\n').find((l) => /^#{1,3}\s/.test(l))?.replace(/^#+\s+/, '') ?? `Part ${i + 2}`}\n**Narration:** ${narration || studioNF()}\n**Visual Direction:** [B-roll or graphic supporting the narration]`;
+    const heading  = c.content.split('\n').find((l) => /^#{1,3}\s/.test(l))?.replace(/^#+\s+/, '')
+      ?? headings[i] ?? `Scene ${i + 1}`;
+    const narSents = cleanSentences([c], undefined, 2);
+    const narration = narSents.join(' ') || studioNF();
+    const location  = places.find((p) => c.content.includes(p)) ?? places[0] ?? 'Location not specified';
+    const chars     = persons.filter((p) => c.content.includes(p)).slice(0, 3);
+    const yr        = (c.content.match(/\b(1[0-9]{3}|20[0-2][0-9])\b/) ?? [])[0];
+    const visual    = presentationVisual(heading, persons, places, years);
+    const duration  = Math.max(1, Math.ceil(narration.replace(studioNF(), '').length / 120));
+    return [
+      `## Scene ${i + 1}: ${heading}`,
+      `**Location:** ${location}${yr ? `  ·  **Period:** ${yr}` : ''}`,
+      `**Characters / Key Figures:** ${chars.length > 0 ? chars.join(', ') : 'Refer to source material'}`,
+      `**Action:** ${narration.slice(0, 220)}`,
+      `**Visual Idea:** ${visual}`,
+      `**Est. Duration:** ~${duration} min`,
+      `**Source Note:** _${c.title}_`,
+    ].join('\n');
   });
 
   return [
+    `# Scene Breakdown: ${docTitle}`,
+    `> **${sceneChunks.length}** scenes grounded in **${chunks.length}** retrieved chunks`,
+    ``,
+    ...sceneCards.map((s) => s + '\n'),
+  ].join('\n');
+}
+
+function buildVideoScript(chunks: HybridSearchResult[]): string {
+  const docTitle   = chunks[0]?.title ?? 'the document';
+  const persons    = mdocNames(chunks);
+  const places     = mdocPlaces(chunks);
+  const years      = mdocYears(chunks);
+  const headings   = studioHeadings(chunks).filter((h) => h.length > 4 && !/^\d+$/.test(h));
+  const allSents   = cleanSentences(chunks, undefined, 15);
+  const hook       = allSents[0] ?? `What is _${docTitle}_ really about?`;
+
+  const scenes = chunks.slice(0, 6).map((c, i) => {
+    const heading   = c.content.split('\n').find((l) => /^#{1,3}\s/.test(l))?.replace(/^#+\s+/, '')
+      ?? headings[i] ?? `Part ${i + 2}`;
+    const narration = cleanSentences([c], undefined, 3)
+      .map((s) => s.replace(/\*\*(.+?)\*\*/g, '$1').trim())
+      .join(' ') || studioNF();
+    const visual    = presentationVisual(heading, persons, places, years);
+    const startSec  = (i + 1) * 30;
+    return [
+      `### Scene ${i + 2}: ${heading}`,
+      `**Timestamp:** [${startSec}s – ${startSec + 30}s]`,
+      `**Narration:** ${narration.slice(0, 280)}`,
+      `**On-screen Text:** ${heading}`,
+      `**Visual Direction:** ${visual}`,
+      `**Source:** _${c.title}_`,
+    ].join('\n');
+  });
+
+  const yearSpan = years.length > 1
+    ? ` — a story spanning ${years[0]} to ${years[years.length - 1]}`
+    : '';
+
+  return [
     `# Video Script: ${docTitle}`,
-    '',
-    `## Hook (opening 15 seconds)\n**Narration:** "${hook}"\n**Visual:** [Eye-catching opening shot]`,
-    '',
-    `### Scene 1: Setup\n**Narration:** Today we explore _${docTitle}_ — here's what you need to know.\n**Visual:** [Title card]`,
-    '',
-    ...sceneNarrations.map((s) => s + '\n'),
-    `## Narration Script\n${allSentences.slice(0, 8).map((s) => `> ${s}`).join('\n\n')}`,
-    '',
-    `## Caption Text\n${allSentences.slice(0, 4).map((s) => `[${s.slice(0, 80)}]`).join('\n')}`,
-    '',
-    `## Ending & CTA\n**Narration:** That's all for today. If you found this useful, like and share.\n**Visual:** [End card with subscribe button]`,
+    `> Script grounded in **${chunks.length}** retrieved chunks`,
+    ``,
+    `## Hook (0–15 seconds)`,
+    `**Narration:** "${hook}"`,
+    `**On-screen Text:** ${docTitle}`,
+    `**Visual Direction:** ${places.length > 0 ? `Establishing shot: ${places[0]}` : `Eye-catching title card with subject imagery`}`,
+    ``,
+    `### Scene 1: Introduction`,
+    `**Timestamp:** [15s – 30s]`,
+    `**Narration:** Today we explore _${docTitle}_${yearSpan}.`,
+    `**On-screen Text:** ${docTitle}`,
+    `**Visual Direction:** Title card with subtitle`,
+    ``,
+    ...scenes.map((s) => s + '\n'),
+    `## Full Narration Script`,
+    allSents.slice(0, 10).map((s, i) => `> **[${i + 1}]** ${s}`).join('\n\n'),
+    ``,
+    `## Caption / On-screen Text`,
+    allSents.slice(0, 5).map((s) => `[${s.slice(0, 90)}]`).join('\n'),
+    ``,
+    `## Ending & Call to Action (final 15 seconds)`,
+    `**Narration:** That covers the key insights from _${docTitle}_. ${persons.length > 0 ? `Remember the stories of ${persons.slice(0, 2).join(' and ')}. ` : ''}If you found this useful, like and share.`,
+    `**On-screen Text:** Key Takeaways`,
+    `**Visual Direction:** Summary card with three bullet points`,
+    ``,
+    `---`,
+    `*Script grounded entirely in retrieved content from _${docTitle}_.*`,
   ].join('\n');
 }
 
 function buildStoryboard(chunks: HybridSearchResult[]): string {
-  const docTitle = chunks[0]?.title ?? 'the document';
+  const docTitle   = chunks[0]?.title ?? 'the document';
+  const persons    = mdocNames(chunks);
+  const places     = mdocPlaces(chunks);
+  const years      = mdocYears(chunks);
+  const headings   = studioHeadings(chunks).filter((h) => h.length > 4 && !/^\d+$/.test(h));
   const sceneChunks = chunks.slice(0, 10);
-  const rows = sceneChunks.map((c, i) => {
-    const heading = c.content.split('\n').find((l) => /^#{1,3}\s/.test(l))?.replace(/^#+\s+/, '') ?? `Scene ${i + 1}`;
-    const narration = c.content.replace(/^#{1,6}\s+.+$/gm, '').split(/(?<=[.!?])\s+/).find((s) => s.length > 30) ?? '';
-    return `| ${i + 1} | [${heading}] | ${narration.replace(/\*\*(.+?)\*\*/g, '$1').trim().slice(0, 100) || studioNF()} | ${heading} | _${c.title}_ |`;
+
+  const cards = sceneChunks.map((c, i) => {
+    const heading   = c.content.split('\n').find((l) => /^#{1,3}\s/.test(l))?.replace(/^#+\s+/, '')
+      ?? headings[i] ?? `Scene ${i + 1}`;
+    const narration = cleanSentences([c], undefined, 1)[0] ?? studioNF();
+    const graphic   = presentationVisual(heading, persons, places, years);
+    return [
+      `## Panel ${i + 1}: ${heading}`,
+      `**Visual Idea:** ${graphic}`,
+      `**Narration:** ${narration.slice(0, 200)}`,
+      `**On-screen Text:** ${heading}`,
+      `**Suggested Graphic:** ${graphic}`,
+      `**Source Note:** _${c.title}_`,
+    ].join('\n');
   });
 
   return [
     `# Storyboard: ${docTitle}`,
-    `> **${sceneChunks.length}** scenes from **${chunks.length}** retrieved chunks.`,
-    '',
-    '| Scene | Visual Idea | Narration | On-screen Text | Source |',
-    '|---|---|---|---|---|',
-    ...rows,
-    '',
-    `*All scenes grounded in retrieved content from _${docTitle}_.*`,
+    `> **${sceneChunks.length}** panels grounded in **${chunks.length}** retrieved chunks`,
+    ``,
+    ...cards.map((c) => c + '\n'),
+    `---`,
+    `*All panels grounded in retrieved content from _${docTitle}_.*`,
   ].join('\n');
 }
 
 function buildVideoIntel(chunks: HybridSearchResult[]): string {
   const docTitle = chunks[0]?.title ?? 'the document';
-  const persons = mdocNames(chunks);
-  const places = mdocPlaces(chunks);
-  const years = mdocYears(chunks);
-  const headings = studioHeadings(chunks);
-  const yearRx = /\b(1[0-9]{3}|20[0-2][0-9])\b/;
+  const persons  = mdocNames(chunks);
+  const places   = mdocPlaces(chunks);
+  const years    = mdocYears(chunks);
+  const yearRx   = /\b(1[0-9]{3}|20[0-2][0-9])\b/;
+  const headings = studioHeadings(chunks).filter((h) => h.length > 4 && !/^\d+$/.test(h));
+  const allText  = chunks.map((c) => cleanChunkContent(c.content)).join('\n\n');
+  const src      = `_${docTitle}_`;
+
+  // ── Entities ──────────────────────────────────────────────────────────────
+  const orgs: string[] = [];
+  for (const m of allText.matchAll(
+    /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\s+(?:Organization|Organisation|Institute|University|College|Ministry|Government|Party|League|Council|Committee|Commission|Foundation|Corps|Force|Army)\b/g,
+  )) {
+    if (orgs.length >= 6) break;
+    orgs.push(m[0].trim().slice(0, 60));
+  }
+
+  // ── Sentence pools ─────────────────────────────────────────────────────────
+  const summary    = cleanSentences(chunks, undefined, 4).join(' ') || studioNF();
+  const mainTopic  = headings[0] ?? docTitle;
+  const keyMoments = cleanSentences(
+    chunks, /important|key|critical|significant|highlight|major|turning point|milestone/i, 6,
+  );
+  const timelineItems = cleanSentences(chunks, yearRx, 8).map((s) => {
+    const yr = s.match(yearRx)?.[0] ?? '?';
+    return `- **${yr}**: ${s.slice(0, 180)}`;
+  });
+
+  // ── Scene breakdown ────────────────────────────────────────────────────────
+  const scenes = chunks.slice(0, 8).map((c, i) => {
+    const heading = c.content.split('\n').find((l) => /^#{1,3}\s/.test(l))?.replace(/^#+\s+/, '')
+      ?? headings[i] ?? `Segment ${i + 1}`;
+    const narration = cleanSentences([c], undefined, 1)[0] ?? studioNF();
+    return `- **Scene ${i + 1} — ${heading}:** ${narration.slice(0, 160)}`;
+  });
+
+  // ── Narration samples ──────────────────────────────────────────────────────
+  const narrations = cleanSentences(chunks, undefined, 6);
+
+  // ── Visual direction ───────────────────────────────────────────────────────
+  const visuals = [
+    persons.length > 0 ? `Portrait or profile cards for ${persons.slice(0, 3).join(', ')}` : null,
+    places.length > 0 ? `Map overlay highlighting ${places.slice(0, 3).join(', ')}` : null,
+    years.length > 2 ? `Animated timeline from ${years[0]} to ${years[years.length - 1]}` : null,
+    headings.length > 0 ? `Title cards for each segment: "${headings.slice(0, 3).join('", "')}"` : null,
+    `B-roll: contextual footage or archival imagery matching each scene topic`,
+  ].filter(Boolean) as string[];
+
+  // ── Short-form ideas ───────────────────────────────────────────────────────
+  const shortIdeas = [
+    keyMoments[0] ? `60-second explainer: "${keyMoments[0].slice(0, 100)}"` : null,
+    persons.length > 0 ? `Quick-bio reel: Who was ${persons[0]}?` : null,
+    years.length > 0 ? `"Did you know?" clip about events in ${years[0]}` : null,
+    places.length > 0 ? `Location spotlight: ${places[0]}` : null,
+    `Key quote card pulled from ${src}`,
+  ].filter(Boolean) as string[];
+
+  // ── Long-form ideas ────────────────────────────────────────────────────────
+  const longIdeas = [
+    `Full documentary: "${docTitle} — A Complete Overview"`,
+    headings.length > 1
+      ? `Multi-part series: one episode per theme (${headings.slice(0, 3).join(', ')})`
+      : null,
+    persons.length > 0 ? `Biography episode: The story of ${persons[0]}` : null,
+    `Deep-dive explainer: background, evidence, implications, and conclusions from ${src}`,
+    `Panel-discussion video based on the key arguments and evidence`,
+  ].filter(Boolean) as string[];
+
+  // ── B-roll suggestions ─────────────────────────────────────────────────────
+  const broll = [
+    places.length > 0 ? `Aerial or establishing shots: ${places.slice(0, 3).join(', ')}` : null,
+    persons.length > 0 ? `Archive photos or illustrations: ${persons.slice(0, 3).join(', ')}` : null,
+    years.length > 0
+      ? `Period-era footage or photographs from ${years[0]}${years.length > 1 ? `–${years[years.length - 1]}` : ''}`
+      : null,
+    `Documents, maps, or source materials referenced in ${src}`,
+    headings.length > 0 ? `Graphic title cards for: "${headings.slice(0, 3).join('", "')}"` : null,
+  ].filter(Boolean) as string[];
+
+  // ── Knowledge graph summary ────────────────────────────────────────────────
+  const kgEntities = [
+    persons.length > 0 ? `**People (${persons.length}):** ${persons.slice(0, 6).join(', ')}` : null,
+    places.length > 0 ? `**Places (${places.length}):** ${places.slice(0, 6).join(', ')}` : null,
+    orgs.length > 0 ? `**Organisations (${orgs.length}):** ${orgs.slice(0, 4).join(', ')}` : null,
+    years.length > 0 ? `**Key Years (${years.length}):** ${years.slice(0, 6).join(', ')}` : null,
+    headings.length > 0 ? `**Concepts (${headings.length}):** ${headings.slice(0, 5).join(', ')}` : null,
+  ].filter(Boolean) as string[];
+
+  const firstSent = cleanSentences(chunks, undefined, 1)[0] ?? studioNF();
 
   return [
     `# Video Intelligence Report: ${docTitle}`,
-    `> Analysed **${chunks.length}** chunks from _${docTitle}_.`,
-    '',
-    studioSec('Content Overview', studioSentences(chunks, undefined, 3).join(' ')),
-    '',
-    studioSec('Key Topics & Segments', headings.slice(0, 8).map((h) => `- ${h}`).join('\n')),
-    '',
-    studioSec('Named Entities',
+    `> Analysed **${chunks.length}** chunks · ${persons.length} people · ${places.length} locations · ${years.length} dates`,
+    ``,
+    studioSec('Video / Transcript Summary', summary),
+    ``,
+    studioSec(
+      'Main Topic',
+      `**${mainTopic}**` +
+      (headings.length > 1 ? `\n\n**Sub-topics:** ${headings.slice(1, 5).join(' · ')}` : ''),
+    ),
+    ``,
+    studioSec(
+      'Key Moments',
+      keyMoments.length > 0
+        ? keyMoments.map((s) => `- ${s.slice(0, 200)}`).join('\n')
+        : '',
+    ),
+    ``,
+    studioSec(
+      'Important People & Organizations',
       [
-        persons.length > 0 ? `**People:** ${persons.slice(0, 6).join(', ')}` : null,
-        places.length > 0 ? `**Places:** ${places.slice(0, 6).join(', ')}` : null,
-      ].filter(Boolean).join('\n')),
-    '',
-    studioSec('Timeline of Events', studioSentences(chunks, yearRx, 8).map((s) => {
-      const yr = s.match(yearRx)?.[0] ?? '';
-      return `- **${yr}**: ${s.slice(0, 160)}`;
-    }).join('\n')),
-    '',
-    studioSec('Key Quotes', studioSentences(chunks, /"[^"]{15,}"/, 5).map((s) => `> ${s}`).join('\n\n')),
-    '',
-    studioSec('Recommended Clips',
-      chunks.slice(0, 5).map((c, i) => {
-        const first = c.content.replace(/^#{1,6}\s+.+$/gm, '').split(/(?<=[.!?])\s+/).find((s) => s.length > 30);
-        return `- **Clip ${i + 1}** (_${c.title}_): "${first?.replace(/\*\*(.+?)\*\*/g, '$1').trim().slice(0, 120) ?? 'See source'}"`;
-      }).join('\n')),
-    '',
-    studioSec('Media Intelligence Summary',
-      `Report covers ${headings.length} topics, ${persons.length} named people, ${places.length} locations, and events spanning ${years.slice(0, 3).join(' – ')}.`),
+        persons.length > 0 ? `**People:** ${persons.slice(0, 8).join(', ')}` : null,
+        orgs.length > 0 ? `**Organisations:** ${orgs.slice(0, 5).join(', ')}` : null,
+      ].filter(Boolean).join('\n\n'),
+    ),
+    ``,
+    studioSec(
+      'Important Places',
+      places.length > 0 ? places.slice(0, 8).map((p) => `- ${p}`).join('\n') : '',
+    ),
+    ``,
+    studioSec(
+      'Important Dates & Timeline',
+      timelineItems.length > 0 ? timelineItems.join('\n') : '',
+    ),
+    ``,
+    studioSec('Scene Breakdown', scenes.join('\n')),
+    ``,
+    studioSec(
+      'Speaker / Narration Notes',
+      narrations.length > 0
+        ? narrations.map((s, i) => `**[${i + 1}]** ${s}`).join('\n\n')
+        : '',
+    ),
+    ``,
+    studioSec('Visual Direction', visuals.map((v) => `- ${v}`).join('\n')),
+    ``,
+    studioSec('Short-form Content Ideas (Social / Clips)', shortIdeas.map((v) => `- ${v}`).join('\n')),
+    ``,
+    studioSec('Long-form Content Ideas (Documentary / Series)', longIdeas.map((v) => `- ${v}`).join('\n')),
+    ``,
+    studioSec('Suggested B-roll & Graphics', broll.map((v) => `- ${v}`).join('\n')),
+    ``,
+    studioSec('Knowledge Graph Entities', kgEntities.join('\n')),
+    ``,
+    studioSec(
+      'Final Media Brief',
+      `**Subject:** ${docTitle}\n` +
+      `**Format:** Multi-scene video or documentary\n` +
+      `**Audience:** General public / researchers\n` +
+      `**Tone:** Informative, factual, grounded in source material\n` +
+      `**Key Message:** ${firstSent}\n` +
+      `**Source:** ${src}`,
+    ),
   ].join('\n');
 }
 

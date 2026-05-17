@@ -5,7 +5,7 @@ import {
   Upload, CheckCircle, AlertCircle, Loader2, HardDrive,
   RefreshCw, FileText, Trash2, Eye, RotateCw, X, Search,
   ChevronDown, BrainCircuit, Image as ImageIcon,
-  Square, CheckSquare, GitCompare, Swords,
+  Square, CheckSquare, GitCompare, Swords, Wand2,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils/cn';
@@ -25,6 +25,7 @@ type DocRow = {
   fileType: string;
   chunksCount: number;
   createdAt: string;
+  tags: string[];
 };
 
 type DocsState =
@@ -44,6 +45,31 @@ type ChunksModal =
 const FILE_TYPE_LABEL: Record<string, string> = {
   txt: 'TXT', markdown: 'MD', pdf: 'PDF', docx: 'DOCX', image: 'IMAGE', transcript: 'SRT/VTT',
 };
+
+function getOutputType(tags: string[]): string {
+  if (tags.includes('presentation')) return 'PRESENTATION';
+  if (tags.includes('video-intel') || tags.includes('script')) return 'SCRIPT';
+  if (tags.includes('study-pack')) return 'STUDY PACK';
+  if (tags.includes('blog-post')) return 'BLOG POST';
+  if (tags.includes('linkedin')) return 'LINKEDIN';
+  if (tags.includes('github-readme')) return 'README';
+  if (tags.includes('knowledge-graph')) return 'GRAPH';
+  return 'REPORT';
+}
+
+type BadgeStyle = { text: string; bg: string; border: string };
+function getOutputBadgeStyle(type: string): BadgeStyle {
+  switch (type) {
+    case 'PRESENTATION': return { text: 'text-violet-300', bg: 'bg-violet-500/15', border: 'border-violet-400/25' };
+    case 'SCRIPT':       return { text: 'text-amber-300',  bg: 'bg-amber-500/15',  border: 'border-amber-400/25'  };
+    case 'STUDY PACK':   return { text: 'text-emerald-300',bg: 'bg-emerald-500/15',border: 'border-emerald-400/25'};
+    case 'BLOG POST':    return { text: 'text-sky-300',    bg: 'bg-sky-500/15',    border: 'border-sky-400/25'    };
+    case 'LINKEDIN':     return { text: 'text-blue-300',   bg: 'bg-blue-500/15',   border: 'border-blue-400/25'   };
+    case 'README':       return { text: 'text-green-300',  bg: 'bg-green-500/15',  border: 'border-green-400/25'  };
+    case 'GRAPH':        return { text: 'text-pink-300',   bg: 'bg-pink-500/15',   border: 'border-pink-400/25'   };
+    default:             return { text: 'text-cyan-300',   bg: 'bg-cyan-500/15',   border: 'border-cyan-400/25'   };
+  }
+}
 
 type DocAction = { label: string; prompt: (title: string) => string };
 
@@ -300,13 +326,18 @@ export function KnowledgeVaultPanel({ className, onAction, onMultiAction }: Prop
 
   const allDocs      = docsState.status === 'ready' ? docsState.docs : [];
   const totalChunks  = allDocs.reduce((s, d) => s + d.chunksCount, 0);
-  const filteredDocs = search.trim()
-    ? allDocs.filter(
-        (d) =>
-          d.title.toLowerCase().includes(search.toLowerCase()) ||
-          (d.fileName ?? '').toLowerCase().includes(search.toLowerCase()),
+  const knowledgeDocs  = allDocs.filter((d) => !d.tags.includes('ai-generated'));
+  const generatedDocs  = allDocs.filter((d) =>  d.tags.includes('ai-generated'));
+
+  const lc = search.trim().toLowerCase();
+  const filteredKnowledgeDocs = lc
+    ? knowledgeDocs.filter(
+        (d) => d.title.toLowerCase().includes(lc) || (d.fileName ?? '').toLowerCase().includes(lc),
       )
-    : allDocs;
+    : knowledgeDocs;
+  const filteredGeneratedDocs = lc
+    ? generatedDocs.filter((d) => d.title.toLowerCase().includes(lc))
+    : generatedDocs;
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
@@ -440,23 +471,120 @@ export function KnowledgeVaultPanel({ className, onAction, onMultiAction }: Prop
       {/* ── Scrollable body ── */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 custom-scrollbar">
 
+        {/* ── Generated Outputs ── */}
+        {docsState.status === 'ready' && generatedDocs.length > 0 && (
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-1.5">
+                <Wand2 className="w-3 h-3 text-violet-400/60" />
+                <span className="text-[10px] font-bold uppercase tracking-widest text-violet-400/70">
+                  Generated Outputs
+                </span>
+              </div>
+              <span className="text-[9px] font-mono text-white/20">
+                {filteredGeneratedDocs.length === generatedDocs.length
+                  ? `${generatedDocs.length} output${generatedDocs.length !== 1 ? 's' : ''}`
+                  : `${filteredGeneratedDocs.length} / ${generatedDocs.length}`}
+              </span>
+            </div>
+
+            {filteredGeneratedDocs.length === 0 && (
+              <p className="text-[10px] text-white/20 font-mono py-2 text-center">
+                No outputs match your search.
+              </p>
+            )}
+
+            <div className="space-y-2">
+              {filteredGeneratedDocs.map((doc) => {
+                const outputType = getOutputType(doc.tags);
+                const badge = getOutputBadgeStyle(outputType);
+                return (
+                  <div
+                    key={doc.id}
+                    className="rounded-xl p-3 space-y-1.5 bg-white/[0.025] border border-violet-400/10"
+                  >
+                    <div className="flex items-start gap-2">
+                      <Wand2 className="w-3.5 h-3.5 text-violet-400/35 shrink-0 mt-0.5" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[11px] text-white/75 font-medium truncate leading-snug">
+                          {doc.title}
+                        </p>
+                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                          <span className={cn(
+                            'text-[8px] font-mono font-bold uppercase px-1.5 py-0.5 rounded border',
+                            badge.text, badge.bg, badge.border,
+                          )}>
+                            {outputType}
+                          </span>
+                          <span className="text-white/15">·</span>
+                          <span className="text-[9px] font-mono text-white/20">
+                            {formatDate(doc.createdAt)}
+                          </span>
+                          <span className="text-white/15">·</span>
+                          <span className="text-[9px] font-mono text-white/20">
+                            {doc.chunksCount} chunk{doc.chunksCount !== 1 ? 's' : ''}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Delete */}
+                      <div className="flex items-center gap-0.5 flex-shrink-0">
+                        {deletingId === doc.id ? (
+                          <span className="p-1">
+                            <Loader2 className="w-3 h-3 text-red-400/50 animate-spin" />
+                          </span>
+                        ) : confirmDeleteId === doc.id ? (
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => void handleDelete(doc.id)}
+                              className="px-1.5 py-0.5 rounded text-[8px] font-mono text-red-300
+                                bg-red-500/15 border border-red-400/20 hover:bg-red-500/25 transition-colors"
+                            >
+                              Confirm
+                            </button>
+                            <button
+                              onClick={() => setConfirmDeleteId(null)}
+                              className="px-1.5 py-0.5 rounded text-[8px] font-mono
+                                text-white/30 hover:text-white/60 transition-colors"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setConfirmDeleteId(doc.id)}
+                            title="Delete output"
+                            className="p-1 rounded-lg text-white/20 hover:text-red-400/70 hover:bg-red-500/10 transition-all"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* ── Document Library ── */}
         <div>
           <div className="flex items-center justify-between mb-2">
             <span className="text-[10px] font-bold uppercase tracking-widest text-white/40">
               Indexed Documents
             </span>
-            {docsState.status === 'ready' && allDocs.length > 0 && (
+            {docsState.status === 'ready' && knowledgeDocs.length > 0 && (
               <span className="text-[9px] font-mono text-white/20">
-                {filteredDocs.length === allDocs.length
-                  ? `${allDocs.length} file${allDocs.length !== 1 ? 's' : ''}`
-                  : `${filteredDocs.length} / ${allDocs.length}`}
+                {filteredKnowledgeDocs.length === knowledgeDocs.length
+                  ? `${knowledgeDocs.length} file${knowledgeDocs.length !== 1 ? 's' : ''}`
+                  : `${filteredKnowledgeDocs.length} / ${knowledgeDocs.length}`}
               </span>
             )}
           </div>
 
           {/* Search */}
-          {docsState.status === 'ready' && allDocs.length > 0 && (
+          {docsState.status === 'ready' && knowledgeDocs.length > 0 && (
             <div className="relative mb-3">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-white/20 pointer-events-none" />
               <input
@@ -496,11 +624,11 @@ export function KnowledgeVaultPanel({ className, onAction, onMultiAction }: Prop
           )}
 
           {/* Empty */}
-          {docsState.status === 'ready' && filteredDocs.length === 0 && (
+          {docsState.status === 'ready' && filteredKnowledgeDocs.length === 0 && (
             <div className="flex flex-col items-center gap-2 py-6 text-center">
               <FileText className="w-6 h-6 text-white/10" />
               <p className="text-[10px] text-white/25 leading-relaxed">
-                {allDocs.length === 0
+                {knowledgeDocs.length === 0
                   ? <><span>No documents indexed yet.</span><br /><span>Upload a file below to get started.</span></>
                   : 'No documents match your search.'}
               </p>
@@ -508,9 +636,9 @@ export function KnowledgeVaultPanel({ className, onAction, onMultiAction }: Prop
           )}
 
           {/* Document cards */}
-          {docsState.status === 'ready' && filteredDocs.length > 0 && (
+          {docsState.status === 'ready' && filteredKnowledgeDocs.length > 0 && (
             <div className="space-y-2">
-              {filteredDocs.map((doc) => (
+              {filteredKnowledgeDocs.map((doc) => (
                 <div
                   key={doc.id}
                   className={cn(

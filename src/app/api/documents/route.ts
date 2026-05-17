@@ -16,9 +16,9 @@ export async function GET(): Promise<Response> {
 
     const { data: docs, error: docsError } = await db
       .from('documents')
-      .select('id, title, source_type, file_name, created_at')
+      .select('id, title, source_type, file_name, tags, created_at')
       .order('created_at', { ascending: false })
-      .limit(50);
+      .limit(100);
 
     if (docsError) throw new Error(docsError.message);
 
@@ -48,6 +48,7 @@ export async function GET(): Promise<Response> {
         fileType: (d.source_type as string | null) ?? 'txt',
         chunksCount: chunkCounts[d.id as string] ?? 0,
         createdAt: d.created_at as string,
+        tags: (d.tags as string[] | null) ?? [],
       })),
     });
   } catch (err) {

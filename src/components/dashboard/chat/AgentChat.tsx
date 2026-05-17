@@ -21,6 +21,7 @@ import {
   FileText,
   Loader2,
   BookMarked,
+  Presentation,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { GlassPanel } from '@/components/dashboard/panels/GlassPanel';
@@ -213,6 +214,132 @@ async function downloadPDF(
   doc.save(`aivora-research-report-${safeFilename(docTitle)}.pdf`);
 }
 
+// ── Presentation detection & PPTX export ──────────────────────────────────────
+
+function isPresentationOutput(content: string): boolean {
+  return /^## Slide [1-9]/m.test(content) && content.includes('**Bullets:**');
+}
+
+interface ParsedSlide {
+  num: number;
+  title: string;
+  bullets: string[];
+  notes: string;
+}
+
+function parsePresentationSlides(content: string): ParsedSlide[] {
+  const slides: ParsedSlide[] = [];
+  for (const block of content.split(/\n(?=## Slide \d+:)/)) {
+    const tm = block.match(/^## Slide (\d+):\s*(.+)/m);
+    if (!tm) continue;
+    const num   = parseInt(tm[1]!, 10);
+    const title = tm[2]!.trim();
+    const bullets: string[] = [];
+    let inBullets = false;
+    let notes = '';
+    for (const line of block.split('\n')) {
+      if (line.includes('**Bullets:**'))          { inBullets = true;  continue; }
+      if (/^\*\*[^*]/.test(line))                  { inBullets = false; }
+      if (inBullets && line.startsWith('- ')) {
+        const b = line.slice(2).replace(/\*\*(.+?)\*\*/g, '$1').trim();
+        if (b && !b.startsWith('_Not found')) bullets.push(b);
+      }
+      const nm = line.match(/\*\*Speaker Notes:\*\*\s*(.+)/);
+      if (nm) notes = nm[1]!.replace(/\*\*(.+?)\*\*/g, '$1').trim();
+    }
+    slides.push({ num, title, bullets, notes });
+  }
+  return slides;
+}
+
+/** Classify a generated output by its markdown headings for tagging and display. */
+function detectOutputType(content: string): { type: string; tag: string; prefix: string } {
+  if (isPresentationOutput(content))
+    return { type: 'PRESENTATION', tag: 'presentation',       prefix: 'Presentation Outline' };
+  if (/^# Video Intelligence Report/m.test(content))
+    return { type: 'SCRIPT',       tag: 'video-intel',        prefix: 'Video Intelligence Report' };
+  if (/^# Video Script/m.test(content))
+    return { type: 'SCRIPT',       tag: 'video-script',       prefix: 'Video Script' };
+  if (/^# Storyboard/m.test(content))
+    return { type: 'SCRIPT',       tag: 'storyboard',         prefix: 'Storyboard' };
+  if (/^# Scene Breakdown/m.test(content))
+    return { type: 'SCRIPT',       tag: 'scene-breakdown',    prefix: 'Scene Breakdown' };
+  if (/^# Study Pack/m.test(content))
+    return { type: 'STUDY PACK',   tag: 'study-pack',         prefix: 'Study Pack' };
+  if (/^# Knowledge Graph/m.test(content))
+    return { type: 'REPORT',       tag: 'knowledge-graph',    prefix: 'Knowledge Graph' };
+  if (/^# Graphical Report/m.test(content))
+    return { type: 'REPORT',       tag: 'graphical-report',   prefix: 'Graphical Report' };
+  if (/^# Transcript Summary/m.test(content))
+    return { type: 'SCRIPT',       tag: 'transcript-summary', prefix: 'Transcript Summary' };
+  if (/^# Blog Post/m.test(content))
+    return { type: 'REPORT',       tag: 'blog-post',          prefix: 'Blog Post' };
+  if (/^# Action Items/m.test(content))
+    return { type: 'REPORT',       tag: 'action-items',       prefix: 'Action Items' };
+  return   { type: 'REPORT',       tag: 'research-report',    prefix: 'Research Report' };
+}
+
+async function downloadPPTX(content: string, docTitle: string): Promise<void> {
+  const { default: PptxGenJS } = await import('pptxgenjs');
+  const pptx = new PptxGenJS();
+  pptx.layout = 'LAYOUT_WIDE';
+
+  const BG  = '020617';
+  const CYN = '22D3EE';
+  const TXT = 'CBD5E1';
+  const MUT = '475569';
+
+  const slides = parsePresentationSlides(content);
+  const fname  = `aivora-presentation-${safeFilename(docTitle || 'presentation')}.pptx`;
+
+  if (slides.length === 0) {
+    const s = pptx.addSlide();
+    s.background = { color: BG };
+    s.addText(docTitle || 'Aivora Presentation', {
+      x: 0.4, y: 2.5, w: 12.5, h: 1.5,
+      fontSize: 40, bold: true, color: CYN, fontFace: 'Calibri', align: 'center',
+    });
+    await pptx.writeFile({ fileName: fname });
+    return;
+  }
+
+  for (const sl of slides) {
+    const s = pptx.addSlide();
+    s.background = { color: BG };
+
+    // Title
+    s.addText(sl.title, {
+      x: 0.4, y: 0.22, w: 11.6, h: 0.85,
+      fontSize: 27, bold: true, color: CYN, fontFace: 'Calibri',
+    });
+
+    // Slide number badge (top-right)
+    s.addText(`${sl.num} / ${slides.length}`, {
+      x: 12.1, y: 0.28, w: 1.0, h: 0.38,
+      fontSize: 10, color: MUT, fontFace: 'Calibri', align: 'right',
+    });
+
+    // Bullets — bullet chars for clean rendering across PPT viewers
+    if (sl.bullets.length > 0) {
+      const bulletStr = sl.bullets.map((b) => `•  ${b}`).join('\n');
+      s.addText(bulletStr, {
+        x: 0.5, y: 1.25, w: 12.2, h: 5.55,
+        fontSize: 18, color: TXT, fontFace: 'Calibri', valign: 'top',
+      });
+    }
+
+    // Footer
+    s.addText(`${docTitle || 'Aivora'} · Slide ${sl.num} of ${slides.length} · Generated by Aivora`, {
+      x: 0.4, y: 7.14, w: 12.5, h: 0.28,
+      fontSize: 9, color: MUT, fontFace: 'Calibri',
+    });
+
+    if (sl.notes) s.addNotes(sl.notes);
+  }
+
+  await pptx.writeFile({ fileName: fname });
+}
+
 export function AgentChat({
   onPhaseChange,
   onCitationsChange,
@@ -233,9 +360,10 @@ export function AgentChat({
   const [webllmProgress, setWebllmProgress] = useState<{ p: number; text: string } | null>(null);
   const [memoryCount, setMemoryCount] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [savingId, setSavingId] = useState<string | null>(null);
-  const [savedId, setSavedId] = useState<string | null>(null);
+  const [copiedId, setCopiedId]   = useState<string | null>(null);
+  const [savingId, setSavingId]   = useState<string | null>(null);
+  const [savedId,  setSavedId]    = useState<string | null>(null);
+  const [pptxingId, setPptxingId] = useState<string | null>(null);
   // Stable ref to handleSubmit so the externalQuery effect always calls the latest version.
   const handleSubmitRef = useRef<(overrideQuery?: string, overrideFilterDocIds?: string[]) => Promise<void>>(async () => {});
 
@@ -518,9 +646,10 @@ export function AgentChat({
   const handleSaveToVault = useCallback(async (msgId: string, content: string, docTitle: string) => {
     setSavingId(msgId);
     try {
-      const title = docTitle
-        ? `Research Report: ${docTitle}`
-        : `Aivora Research Report — ${new Date().toLocaleDateString()}`;
+      const { type: outputType, tag, prefix } = detectOutputType(content);
+      const date  = new Date().toLocaleDateString();
+      const title = docTitle ? `${prefix}: ${docTitle}` : `${prefix} — ${date}`;
+      const fname = `aivora-${tag}-${safeFilename(docTitle || date)}.md`;
       const res = await fetch('/api/documents/upload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -528,8 +657,9 @@ export function AgentChat({
           title,
           content,
           source_type: 'markdown',
-          file_name: `aivora-research-report-${safeFilename(docTitle || title)}.md`,
-          tags: ['research-report', 'ai-generated'],
+          file_name: fname,
+          tags: [tag, 'ai-generated'],
+          metadata: { outputType },
         }),
       });
       if (!res.ok) {
@@ -537,12 +667,23 @@ export function AgentChat({
         throw new Error(err.error ?? 'Upload failed');
       }
       setSavedId(msgId);
-      toast.success('Research report saved to Knowledge Vault.');
+      toast.success(`${prefix} saved to Knowledge Vault.`);
       setTimeout(() => setSavedId((prev) => (prev === msgId ? null : prev)), 3000);
     } catch (err) {
       toast.error(`Save failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setSavingId(null);
+    }
+  }, []);
+
+  const handleDownloadPPTX = useCallback(async (msgId: string, content: string, docTitle: string) => {
+    setPptxingId(msgId);
+    try {
+      await downloadPPTX(content, docTitle);
+    } catch (err) {
+      toast.error(`PPTX export failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setPptxingId(null);
     }
   }, []);
 
@@ -738,8 +879,8 @@ export function AgentChat({
                       </div>
                     )}
 
-                    {/* Research report export bar */}
-                    {msg.role === 'assistant' && isResearchReport(msg.content) && (
+                    {/* Export bar — shown for research reports and presentation outputs */}
+                    {msg.role === 'assistant' && (isResearchReport(msg.content) || isPresentationOutput(msg.content)) && (
                       <div className="flex items-center gap-1.5 mt-2 px-1 flex-wrap">
                         <span className="text-[9px] font-mono text-white/20 mr-0.5">Export:</span>
 
@@ -774,6 +915,21 @@ export function AgentChat({
                           <Download className="w-3 h-3" />
                           <span>.pdf</span>
                         </button>
+
+                        {/* Export PPTX — only shown for presentation outputs */}
+                        {isPresentationOutput(msg.content) && (
+                          <button
+                            onClick={() => void handleDownloadPPTX(msg.id, msg.content, msg.citations?.[0]?.documentTitle ?? '')}
+                            disabled={pptxingId === msg.id}
+                            title="Download as PowerPoint (.pptx)"
+                            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-white/4 border border-white/8 hover:bg-white/8 hover:border-orange-400/20 transition-all text-white/40 hover:text-orange-300 disabled:opacity-40 text-[10px]"
+                          >
+                            {pptxingId === msg.id
+                              ? <Loader2 className="w-3 h-3 animate-spin" />
+                              : <Presentation className="w-3 h-3" />}
+                            <span>{pptxingId === msg.id ? 'Building…' : '.pptx'}</span>
+                          </button>
+                        )}
 
                         {/* Save to Vault */}
                         <button
