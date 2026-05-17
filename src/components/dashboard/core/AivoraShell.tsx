@@ -18,6 +18,7 @@ import {
   HeartPulse,
   Zap,
   HardDrive,
+  Wand2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -27,6 +28,7 @@ import { ReasoningTimeline } from '@/components/dashboard/chat/ReasoningTimeline
 import { SourceCitationPanel } from '@/components/dashboard/panels/SourceCitationPanel';
 import { SystemAnalyticsPanel } from '@/components/dashboard/panels/SystemAnalyticsPanel';
 import { KnowledgeVaultPanel } from '@/components/dashboard/panels/KnowledgeVaultPanel';
+import { StudioPanel } from '@/components/dashboard/panels/StudioPanel';
 import { CommandPalette, type PaletteCommand } from '@/components/dashboard/command/CommandPalette';
 import { cn } from '@/lib/utils/cn';
 import type { AgentPhase, ReasoningTrace, SystemMode, AgentAnalytics } from '@/lib/types/agent';
@@ -46,7 +48,7 @@ const AgentGraph = dynamic(
   { ssr: false, loading: () => <div className="flex-1 flex items-center justify-center text-white/20 text-xs font-mono">Loading graph…</div> }
 );
 
-type RightTab = 'citations' | 'analytics' | 'graph' | 'vault';
+type RightTab = 'citations' | 'analytics' | 'graph' | 'vault' | 'studio';
 
 type RightTabButtonProps = {
   tab: RightTab;
@@ -117,7 +119,7 @@ export function AivoraShell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [webgpuAvailable, setWebgpuAvailable] = useState(false);
   const [webllmReady, setWebllmReady] = useState(false);
-  const [vaultAction, setVaultAction] = useState<{ query: string; documentId?: string } | null>(null);
+  const [vaultAction, setVaultAction] = useState<{ query: string; documentId?: string; documentIds?: string[] } | null>(null);
 
   const supabaseConnected = !!(
     process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -206,6 +208,13 @@ export function AivoraShell() {
       description: 'Switch to the Vault tab to upload and index documents',
       icon: Upload,
       action: () => setRightTab('vault'),
+    },
+    {
+      id: 'studio',
+      label: 'Open Tools Studio',
+      description: 'Switch to the Studio tab — run workflows like Study Pack, Blog Post, Video Script',
+      icon: Wand2,
+      action: () => setRightTab('studio'),
     },
     {
       id: 'webllm',
@@ -388,6 +397,7 @@ export function AivoraShell() {
             <RightTabButton tab="analytics" icon={BarChart3} label="Analytics" activeTab={rightTab} onSelect={setRightTab} />
             <RightTabButton tab="graph" icon={Network} label="Graph" activeTab={rightTab} onSelect={setRightTab} />
             <RightTabButton tab="vault" icon={HardDrive} label="Vault" activeTab={rightTab} onSelect={setRightTab} />
+            <RightTabButton tab="studio" icon={Wand2} label="Studio" activeTab={rightTab} onSelect={setRightTab} />
           </div>
 
           {/* Tab content */}
@@ -411,6 +421,19 @@ export function AivoraShell() {
               <KnowledgeVaultPanel
                 className="h-full"
                 onAction={(query, documentId) => setVaultAction({ query, documentId })}
+                onMultiAction={(query, documentIds) => {
+                  setVaultAction({ query, documentIds });
+                  setRightTab('citations');
+                }}
+              />
+            )}
+            {rightTab === 'studio' && (
+              <StudioPanel
+                className="h-full"
+                onMultiAction={(query, documentIds) => {
+                  setVaultAction({ query, documentIds });
+                  setRightTab('citations');
+                }}
               />
             )}
           </div>

@@ -42,7 +42,7 @@ type AgentChatProps = {
   onModeChange: (mode: SystemMode) => void;
   onAnalyticsChange: (analytics: AgentAnalytics) => void;
   onLocalAIReady?: () => void;
-  externalQuery?: { query: string; documentId?: string } | null;
+  externalQuery?: { query: string; documentId?: string; documentIds?: string[] } | null;
   onExternalQueryConsumed?: () => void;
   className?: string;
 };
@@ -494,7 +494,7 @@ export function AgentChat({
     onExternalQueryConsumed?.();
     void handleSubmitRef.current(
       externalQuery.query,
-      externalQuery.documentId ? [externalQuery.documentId] : undefined,
+      externalQuery.documentIds ?? (externalQuery.documentId ? [externalQuery.documentId] : undefined),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalQuery]);

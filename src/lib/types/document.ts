@@ -1,4 +1,4 @@
-export type SourceType = 'pdf' | 'docx' | 'txt' | 'html' | 'markdown' | 'url' | 'manual' | 'image';
+export type SourceType = 'pdf' | 'docx' | 'txt' | 'html' | 'markdown' | 'url' | 'manual' | 'image' | 'transcript';
 
 export type Document = {
   id: string;

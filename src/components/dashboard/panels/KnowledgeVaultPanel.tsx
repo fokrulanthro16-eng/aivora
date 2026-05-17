@@ -5,6 +5,7 @@ import {
   Upload, CheckCircle, AlertCircle, Loader2, HardDrive,
   RefreshCw, FileText, Trash2, Eye, RotateCw, X, Search,
   ChevronDown, BrainCircuit, Image as ImageIcon,
+  Square, CheckSquare, GitCompare, Swords,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils/cn';
@@ -41,7 +42,7 @@ type ChunksModal =
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const FILE_TYPE_LABEL: Record<string, string> = {
-  txt: 'TXT', markdown: 'MD', pdf: 'PDF', docx: 'DOCX', image: 'IMAGE',
+  txt: 'TXT', markdown: 'MD', pdf: 'PDF', docx: 'DOCX', image: 'IMAGE', transcript: 'SRT/VTT',
 };
 
 type DocAction = { label: string; prompt: (title: string) => string };
@@ -64,6 +65,44 @@ const DEEP_ACTIONS: DocAction[] = [
   { label: 'Explain Simply',  prompt: () => 'Explain the main content of this document in plain language that anyone can understand, avoiding jargon.' },
   { label: 'Exam Questions',  prompt: () => 'Generate 10 exam-style questions with answers covering the key content of this document.' },
 ];
+
+function compareDocumentsPrompt(docs: DocRow[]): string {
+  const titles = docs.map((d, i) => `Document ${String.fromCharCode(65 + i)}: "${d.title}"`).join('\n');
+  return (
+    `Compare the following selected documents:\n${titles}\n\n` +
+    `Use only content from the selected documents. Do not invent facts. Cite sources from each document.\n\n` +
+    `## Executive Comparison Summary\n` +
+    `## Similarities\n` +
+    `## Differences\n` +
+    `## Contradictions or Conflicting Claims\n` +
+    `## Timeline Comparison\n` +
+    `## People / Organizations Comparison\n` +
+    `## Places Comparison\n` +
+    `## Key Concepts Comparison\n` +
+    `## Evidence Table\n` +
+    `## Source-backed Findings\n` +
+    `## Final Comparative Brief\n\n` +
+    `Format with markdown headings (##). Use tables where appropriate. Ground all answers in the selected documents only.`
+  );
+}
+
+function debateModePrompt(docs: DocRow[]): string {
+  const titles = docs.map((d, i) => `Document ${String.fromCharCode(65 + i)}: "${d.title}"`).join('\n');
+  const positionSections = docs.map((_, i) => `## Position of Document ${String.fromCharCode(65 + i)}`).join('\n');
+  return (
+    `Create a structured academic debate between the following selected documents:\n${titles}\n\n` +
+    `Use only content from the selected documents. Do not invent facts. Cite sources.\n\n` +
+    `${positionSections}\n` +
+    `## Evidence from Each Document\n` +
+    `## Strongest Arguments\n` +
+    `## Weakest Arguments\n` +
+    `## Points of Agreement\n` +
+    `## Points of Disagreement\n` +
+    `## Neutral Judge Summary\n` +
+    `## Final Verdict\n\n` +
+    `Format with markdown headings (##). Ground all debate points in the selected documents only.`
+  );
+}
 
 function autoResearchPrompt(title: string, fileName: string): string {
   return (
@@ -103,9 +142,10 @@ function autoResearchPrompt(title: string, fileName: string): string {
 type Props = {
   className?: string;
   onAction?: (query: string, documentId?: string) => void;
+  onMultiAction?: (query: string, documentIds: string[]) => void;
 };
 
-export function KnowledgeVaultPanel({ className, onAction }: Props) {
+export function KnowledgeVaultPanel({ className, onAction, onMultiAction }: Props) {
   const [uploadState, setUploadState]         = useState<UploadState>({ status: 'idle' });
   const [docsState, setDocsState]             = useState<DocsState>({ status: 'idle' });
   const [title, setTitle]                     = useState('');
@@ -115,6 +155,7 @@ export function KnowledgeVaultPanel({ className, onAction }: Props) {
   const [chunksModal, setChunksModal]         = useState<ChunksModal>({ open: false });
   const [expandedCardId, setExpandedCardId]   = useState<string | null>(null);
   const [reportSentId, setReportSentId]       = useState<string | null>(null);
+  const [selectedIds, setSelectedIds]         = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
   // ── Fetch documents ──────────────────────────────────────────────────────────
@@ -220,6 +261,28 @@ export function KnowledgeVaultPanel({ className, onAction }: Props) {
     }
   }
 
+  // ── Multi-select helpers ─────────────────────────────────────────────────────
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  }
+
+  function handleCompare() {
+    if (selectedIds.length < 2) return;
+    const selectedDocs = allDocs.filter((d) => selectedIds.includes(d.id));
+    onMultiAction?.(compareDocumentsPrompt(selectedDocs), selectedIds);
+    setSelectedIds([]);
+    setReportSentId(null);
+  }
+
+  function handleDebate() {
+    if (selectedIds.length < 2) return;
+    const selectedDocs = allDocs.filter((d) => selectedIds.includes(d.id));
+    onMultiAction?.(debateModePrompt(selectedDocs), selectedIds);
+    setSelectedIds([]);
+    setReportSentId(null);
+  }
+
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
   function formatDate(iso: string): string {
@@ -276,6 +339,103 @@ export function KnowledgeVaultPanel({ className, onAction }: Props) {
           </div>
         </div>
       </div>
+
+      {/* ── Compare Bar — fixed below header, never scrolls away ── */}
+      <AnimatePresence>
+        {selectedIds.length >= 1 && onMultiAction && (
+          <motion.div
+            key="compare-bar"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.18 }}
+            className="flex-shrink-0 overflow-hidden border-b border-cyan-400/15"
+          >
+            <div className="px-4 py-3 bg-gradient-to-r from-cyan-500/8 via-violet-500/5 to-cyan-500/8 space-y-2.5">
+
+              {/* Bar header row */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <motion.div
+                    className="w-1.5 h-1.5 rounded-full bg-cyan-400"
+                    animate={{ opacity: [1, 0.4, 1] }}
+                    transition={{ duration: 1.5, repeat: Infinity }}
+                  />
+                  <span className="text-[10px] font-mono font-semibold text-cyan-300">
+                    {selectedIds.length} document{selectedIds.length !== 1 ? 's' : ''} selected
+                  </span>
+                </div>
+                <button
+                  onClick={() => setSelectedIds([])}
+                  title="Clear selection"
+                  className="text-white/25 hover:text-white/60 transition-colors"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+
+              {/* Selected document labels */}
+              <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+                {allDocs
+                  .filter((d) => selectedIds.includes(d.id))
+                  .map((d, i) => (
+                    <div key={d.id} className="flex items-center gap-1">
+                      <span className="text-[8px] font-mono text-cyan-400/60 font-bold">
+                        {String.fromCharCode(65 + i)}
+                      </span>
+                      <span className="text-[9px] font-mono text-white/40 max-w-[120px] truncate">
+                        {d.title}
+                      </span>
+                      {d.chunksCount === 0 && (
+                        <span className="text-[8px] font-mono text-amber-400/60">(no chunks)</span>
+                      )}
+                    </div>
+                  ))}
+              </div>
+
+              {/* Chunk warning */}
+              {allDocs.filter((d) => selectedIds.includes(d.id)).some((d) => d.chunksCount === 0) && (
+                <div className="flex items-center gap-1.5 rounded-lg bg-amber-500/8 border border-amber-400/15 px-2 py-1">
+                  <AlertCircle className="w-3 h-3 text-amber-400/60 flex-shrink-0" />
+                  <span className="text-[9px] font-mono text-amber-300/60">
+                    A selected document has no indexed chunks.
+                  </span>
+                </div>
+              )}
+
+              {/* Action buttons — enabled only when ≥2 selected */}
+              {selectedIds.length < 2 ? (
+                <p className="text-[9px] font-mono text-white/30 text-center pb-0.5">
+                  Select at least 2 documents to compare
+                </p>
+              ) : (
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleCompare}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl
+                      bg-cyan-500/15 border border-cyan-400/30 text-cyan-300
+                      hover:bg-cyan-500/25 hover:border-cyan-400/50
+                      transition-all duration-150 text-[10px] font-mono font-semibold"
+                  >
+                    <GitCompare className="w-3.5 h-3.5 flex-shrink-0" />
+                    Compare Documents
+                  </button>
+                  <button
+                    onClick={handleDebate}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl
+                      bg-violet-500/15 border border-violet-400/30 text-violet-300
+                      hover:bg-violet-500/25 hover:border-violet-400/50
+                      transition-all duration-150 text-[10px] font-mono font-semibold"
+                  >
+                    <Swords className="w-3.5 h-3.5 flex-shrink-0" />
+                    Debate Mode
+                  </button>
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ── Scrollable body ── */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 custom-scrollbar">
@@ -353,7 +513,12 @@ export function KnowledgeVaultPanel({ className, onAction }: Props) {
               {filteredDocs.map((doc) => (
                 <div
                   key={doc.id}
-                  className="bg-white/[0.03] border border-white/8 rounded-xl p-3 space-y-2.5"
+                  className={cn(
+                    'rounded-xl p-3 space-y-2.5 transition-all duration-200',
+                    selectedIds.includes(doc.id)
+                      ? 'bg-cyan-500/[0.04] border border-cyan-400/30 shadow-[0_0_14px_rgba(34,211,238,0.07)]'
+                      : 'bg-white/[0.03] border border-white/8',
+                  )}
                 >
                   {/* Top row */}
                   <div className="flex items-start gap-2">
@@ -382,6 +547,24 @@ export function KnowledgeVaultPanel({ className, onAction }: Props) {
 
                     {/* Management buttons */}
                     <div className="flex items-center gap-0.5 flex-shrink-0">
+                      {/* Select for Compare */}
+                      {onMultiAction && (
+                        <button
+                          onClick={() => toggleSelect(doc.id)}
+                          title={selectedIds.includes(doc.id) ? 'Deselect' : 'Select for Compare'}
+                          className={cn(
+                            'p-1 rounded-lg transition-all',
+                            selectedIds.includes(doc.id)
+                              ? 'text-cyan-300 bg-cyan-500/15 border border-cyan-400/20'
+                              : 'text-white/20 hover:text-cyan-400/60 hover:bg-cyan-500/10',
+                          )}
+                        >
+                          {selectedIds.includes(doc.id)
+                            ? <CheckSquare className="w-3 h-3" />
+                            : <Square className="w-3 h-3" />}
+                        </button>
+                      )}
+
                       {/* View chunks */}
                       <button
                         onClick={() => void handleViewChunks(doc.id, doc.title)}
@@ -584,7 +767,7 @@ export function KnowledgeVaultPanel({ className, onAction }: Props) {
             Add Document
           </p>
           <p className="text-[11px] text-white/30 leading-relaxed mb-3">
-            Upload .txt, .md, .pdf, .docx, .png, .jpg, .jpeg, or .webp to index into Supabase pgvector.
+            Upload .txt, .md, .pdf, .docx, .png, .jpg, .jpeg, .webp, .srt, or .vtt to index into Supabase pgvector.
             Files are chunked and embedded locally. Video transcript support coming soon.
           </p>
 
@@ -596,7 +779,7 @@ export function KnowledgeVaultPanel({ className, onAction }: Props) {
               <input
                 ref={fileRef}
                 type="file"
-                accept=".txt,.md,.pdf,.docx,.png,.jpg,.jpeg,.webp"
+                accept=".txt,.md,.pdf,.docx,.png,.jpg,.jpeg,.webp,.srt,.vtt"
                 required
                 className="block w-full text-[11px] text-white/50
                   file:mr-2.5 file:py-1 file:px-2.5
@@ -606,7 +789,7 @@ export function KnowledgeVaultPanel({ className, onAction }: Props) {
                   hover:file:bg-cyan-500/25 cursor-pointer"
               />
               <p className="text-white/20 text-[9px] mt-1 font-mono">
-                .txt · .md · .pdf · .docx · .png · .jpg · .jpeg · .webp &nbsp;|&nbsp; max 10 MB
+                .txt · .md · .pdf · .docx · .png · .jpg · .jpeg · .webp · .srt · .vtt &nbsp;|&nbsp; max 10 MB
               </p>
             </div>
 

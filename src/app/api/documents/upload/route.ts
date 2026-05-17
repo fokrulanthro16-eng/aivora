@@ -7,6 +7,7 @@ import { embedBatch } from '@/lib/ai/embeddings/local-embedder';
 import { parsePdf } from '@/lib/documents/parsers/pdf-parser';
 import { parseDocx } from '@/lib/documents/parsers/docx-parser';
 import { parseImage } from '@/lib/documents/parsers/image-parser';
+import { parseTranscript } from '@/lib/documents/parsers/transcript-parser';
 import type { DocumentChunkInsert, SourceType } from '@/lib/types/document';
 
 export const runtime = 'nodejs';
@@ -25,14 +26,20 @@ const ALLOWED_EXT: Record<string, SourceType> = {
   '.jpg':  'image',
   '.jpeg': 'image',
   '.webp': 'image',
+  '.srt':  'transcript',
+  '.vtt':  'transcript',
 };
 
-const VIDEO_EXT = new Set(['.mp4', '.webm', '.mov', '.avi', '.mkv']);
+// Video and audio — return early with a helpful transcript-first message.
+const MEDIA_EXT = new Set([
+  '.mp4', '.webm', '.mov', '.avi', '.mkv',
+  '.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac',
+]);
 
 const LegacyBodySchema = z.object({
   title: z.string().min(1).max(500),
   content: z.string().min(10).max(500_000),
-  source_type: z.enum(['pdf', 'docx', 'txt', 'html', 'markdown', 'url', 'manual']).optional(),
+  source_type: z.enum(['pdf', 'docx', 'txt', 'html', 'markdown', 'url', 'manual', 'transcript']).optional(),
   source_url: z.string().url().optional(),
   file_name: z.string().optional(),
   tags: z.array(z.string()).optional(),
@@ -139,16 +146,16 @@ async function handlePost(request: Request): Promise<Response> {
     const dotIdx = fileName.lastIndexOf('.');
     const ext = dotIdx >= 0 ? fileName.slice(dotIdx).toLowerCase() : '';
 
-    if (VIDEO_EXT.has(ext)) {
+    if (MEDIA_EXT.has(ext)) {
       return err(
-        'Video ingestion requires transcript extraction. Please upload a transcript .txt or .md for now.',
+        'Audio/video analysis is transcript-first. Upload a .srt or .vtt transcript (or .txt / .md) for now.',
         415,
       );
     }
 
     if (!(ext in ALLOWED_EXT)) {
       return err(
-        `Unsupported file type "${ext || '(none)'}". Allowed: .txt .md .pdf .docx .png .jpg .jpeg .webp`,
+        `Unsupported file type "${ext || '(none)'}". Allowed: .txt .md .pdf .docx .png .jpg .jpeg .webp .srt .vtt`,
         415,
       );
     }
@@ -171,7 +178,9 @@ async function handlePost(request: Request): Promise<Response> {
       } else if (ext === '.docx') {
         rawText = await parseDocx(buffer);
       } else if (sourceType === 'image') {
-        rawText = await parseImage(buffer); // throws with user-friendly message if no text
+        rawText = await parseImage(buffer);
+      } else if (sourceType === 'transcript') {
+        rawText = parseTranscript(buffer);
       } else {
         rawText = buffer.toString('utf-8');
       }
@@ -182,10 +191,15 @@ async function handlePost(request: Request): Promise<Response> {
     }
 
     if (!rawText || rawText.trim().length < 10) {
+      const typeLabel =
+        sourceType === 'image' ? 'image' : sourceType === 'transcript' ? 'transcript' : 'file';
       return err(
-        sourceType === 'image'
-          ? 'No readable text found in this image.'
-          : 'Extracted text is empty or too short. The file may be image-only, password-protected, or corrupt.',
+        `No readable text found in this ${typeLabel}. ` +
+          (typeLabel === 'image'
+            ? 'Ensure the image contains visible text.'
+            : typeLabel === 'transcript'
+            ? 'Ensure the transcript file contains subtitle cues.'
+            : 'The file may be image-only, password-protected, or corrupt.'),
         422,
       );
     }

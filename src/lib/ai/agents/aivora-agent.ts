@@ -201,6 +201,335 @@ function isAutoResearchReport(query: string): boolean {
   );
 }
 
+function isCompareDocuments(query: string): boolean {
+  const lc = query.toLowerCase();
+  return (
+    lc.includes('compare the following selected documents') ||
+    lc.includes('executive comparison summary') ||
+    lc.includes('final comparative brief')
+  );
+}
+
+function isDebateMode(query: string): boolean {
+  const lc = query.toLowerCase();
+  return (
+    lc.includes('structured academic debate') ||
+    lc.includes('position of document a') ||
+    lc.includes('neutral judge summary')
+  );
+}
+
+// ── Multi-document shared helpers ─────────────────────────────────────────────
+
+type DocGroup = { title: string; chunks: HybridSearchResult[] };
+
+function groupByDocument(chunks: HybridSearchResult[]): DocGroup[] {
+  const map = new Map<string, DocGroup>();
+  for (const c of chunks) {
+    if (!map.has(c.document_id)) {
+      map.set(c.document_id, { title: c.title, chunks: [] });
+    }
+    map.get(c.document_id)!.chunks.push(c);
+  }
+  return [...map.values()];
+}
+
+function mdocSentences(chunks: HybridSearchResult[], pattern?: RegExp, max = 4): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const c of chunks) {
+    for (const s of c.content.split(/(?<=[.!?])\s+/).map((x) => x.trim()).filter((x) => x.length > 25)) {
+      if ((!pattern || pattern.test(s)) && !seen.has(s)) {
+        seen.add(s);
+        result.push(s.replace(/\*\*(.+?)\*\*/g, '$1'));
+        if (result.length >= max) return result;
+      }
+    }
+  }
+  return result;
+}
+
+function mdocYears(chunks: HybridSearchResult[]): string[] {
+  const years = new Set<string>();
+  for (const c of chunks) {
+    for (const m of c.content.matchAll(/\b(1[0-9]{3}|20[0-2][0-9])\b/g)) {
+      years.add(m[1]);
+    }
+  }
+  return [...years].slice(0, 10);
+}
+
+function mdocNames(chunks: HybridSearchResult[]): string[] {
+  const names = new Set<string>();
+  const stopWords = new Set([
+    'The','This','These','Those','When','After','Before','During',
+    'Over','From','By','In','On','At','To','Of','And','But','Or',
+    'With','For','Into','Its','He','She','They','We',
+  ]);
+  for (const c of chunks) {
+    for (const m of c.content.matchAll(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\b/g)) {
+      const name = m[1];
+      if (name.includes(' ') && !stopWords.has(name.split(' ')[0]!)) names.add(name);
+    }
+  }
+  return [...names].slice(0, 8);
+}
+
+function mdocPlaces(chunks: HybridSearchResult[]): string[] {
+  const places = new Set<string>();
+  const known = [
+    'Bangladesh','Pakistan','India','Dhaka','Chittagong','Bengal',
+    'East Pakistan','West Pakistan','London','Delhi','Karachi',
+    'Aivora','Sylhet','Rajshahi','Khulna','Rangpur',
+  ];
+  for (const c of chunks) {
+    for (const p of known) {
+      if (c.content.includes(p)) places.add(p);
+    }
+    for (const m of c.content.matchAll(/\b([A-Z][a-z]+(?:stan|pur|abad|nagar|ganj))\b/g)) {
+      places.add(m[1]);
+    }
+  }
+  return [...places].slice(0, 8);
+}
+
+// ── Comparison report builder ─────────────────────────────────────────────────
+
+function buildComparisonReport(chunks: HybridSearchResult[]): string {
+  const NOT_FOUND = '_Not found in the selected document chunks._';
+  const docs = groupByDocument(chunks);
+
+  if (docs.length < 2) {
+    return (
+      '**Multi-document comparison requires chunks from at least 2 documents.**\n\n' +
+      'Please select 2 or more documents with indexed chunks via the Vault tab.'
+    );
+  }
+
+  const label = (i: number) => String.fromCharCode(65 + i);
+  const docLabels = docs.map((d, i) => `- **Document ${label(i)}**: _${d.title}_`);
+  const yearRx = /\b(1[0-9]{3}|20[0-2][0-9])\b/;
+  const eventRx = /war|battle|independence|revolution|liberation|election|treaty|partition|conflict|movement/i;
+  const causeRx = /because|led to|resulted in|caused|due to|therefore|consequently|as a result/i;
+
+  const docSummary = (d: DocGroup) => {
+    const text = d.chunks.slice(0, 2).map((c) => c.content.replace(/^#{1,6}\s+.+$/gm, '').trim()).join(' ');
+    return text.split(/(?<=[.!?])\s+/).filter((s) => s.trim().length > 30).slice(0, 3)
+      .map((s) => s.replace(/\*\*(.+?)\*\*/g, '$1')).join(' ') || NOT_FOUND;
+  };
+
+  const allYearSets = docs.map((d) => new Set(mdocYears(d.chunks)));
+  const commonYears = [...(allYearSets[0] ?? new Set<string>())].filter(
+    (y) => allYearSets.slice(1).every((s) => s.has(y)),
+  );
+  const uniqueYears = docs.map((d, i) => {
+    const mine = new Set(mdocYears(d.chunks));
+    const others = new Set(docs.filter((_, j) => j !== i).flatMap((x) => mdocYears(x.chunks)));
+    return [...mine].filter((y) => !others.has(y));
+  });
+
+  const evidenceRows = docs.flatMap((d, i) =>
+    d.chunks.slice(0, 2).map((c) => {
+      const claim = c.content.replace(/^#{1,6}\s+.+$/gm, '').split(/(?<=[.!?])\s+/).find((s) => s.trim().length > 30);
+      return `| Doc ${label(i)} | ${claim ? claim.replace(/\*\*(.+?)\*\*/g, '$1').slice(0, 120) : 'See source'} | ${d.title} |`;
+    }),
+  );
+
+  const sec = (title: string, content: string) => `## ${title}\n${content || NOT_FOUND}`;
+
+  return [
+    `# Document Comparison Report`,
+    `> Comparing **${docs.length}** documents using **${chunks.length}** retrieved chunks.`,
+    '',
+    `**Documents being compared:**`,
+    docLabels.join('\n'),
+    '',
+    sec('Executive Comparison Summary',
+      docs.map((d, i) => `**Doc ${label(i)} (_${d.title}_):** ${docSummary(d)}`).join('\n\n')),
+    '',
+    sec('Similarities',
+      commonYears.length > 0
+        ? `Both documents share references to: **${commonYears.join(', ')}**\n\n` +
+          docs.map((d, i) => {
+            const shared = mdocSentences(d.chunks, /shared|both|similar|common|also/i, 2);
+            return shared.length > 0 ? `**Doc ${label(i)}:** ${shared[0]}` : '';
+          }).filter(Boolean).join('\n')
+        : 'No direct common time periods found from retrieved chunks. Topics may differ significantly.'),
+    '',
+    sec('Differences',
+      docs.map((d, i) => {
+        const unique = uniqueYears[i] ?? [];
+        const events = mdocSentences(d.chunks, eventRx, 2);
+        return (
+          `**Doc ${label(i)} (_${d.title}_):**\n` +
+          (unique.length > 0 ? `- Unique time references: ${unique.join(', ')}\n` : '') +
+          (events.length > 0 ? events.map((e) => `- ${e}`).join('\n') : '- Distinct events not isolated from retrieved chunks.')
+        );
+      }).join('\n\n')),
+    '',
+    sec('Contradictions or Conflicting Claims',
+      docs.flatMap((d, i) =>
+        mdocSentences(d.chunks, /however|unlike|contrary|instead|whereas|dispute|contradict/i, 2)
+          .map((s) => `- **Doc ${label(i)}:** ${s}`),
+      ).join('\n')),
+    '',
+    sec('Timeline Comparison',
+      docs.map((d, i) => {
+        const years = mdocYears(d.chunks);
+        const sents = mdocSentences(d.chunks, yearRx, 4);
+        return (
+          `**Doc ${label(i)} (_${d.title}_):** ${years.join(', ') || 'No specific dates found'}\n` +
+          sents.map((s) => `  - ${s}`).join('\n')
+        );
+      }).join('\n\n')),
+    '',
+    sec('People / Organizations Comparison',
+      docs.map((d, i) => {
+        const names = mdocNames(d.chunks);
+        return `**Doc ${label(i)} (_${d.title}_):**\n${names.length > 0 ? names.map((n) => `- ${n}`).join('\n') : '- None identified'}`;
+      }).join('\n\n')),
+    '',
+    sec('Places Comparison',
+      docs.map((d, i) => {
+        const places = mdocPlaces(d.chunks);
+        return `**Doc ${label(i)} (_${d.title}_):**\n${places.length > 0 ? places.map((p) => `- ${p}`).join('\n') : '- None identified'}`;
+      }).join('\n\n')),
+    '',
+    sec('Key Concepts Comparison',
+      docs.map((d, i) => {
+        const headings = d.chunks.flatMap((c) =>
+          c.content.split('\n').filter((l) => /^#{1,3}\s/.test(l)).map((l) => l.replace(/^#+\s+/, '')),
+        );
+        return (
+          `**Doc ${label(i)} (_${d.title}_):**\n` +
+          (headings.length > 0 ? headings.slice(0, 5).map((h) => `- ${h}`).join('\n') : '- Concepts not identified from headings')
+        );
+      }).join('\n\n')),
+    '',
+    sec('Evidence Table',
+      evidenceRows.length > 0
+        ? '| Doc | Evidence | Source |\n|---|---|---|\n' + evidenceRows.join('\n')
+        : NOT_FOUND),
+    '',
+    sec('Source-backed Findings',
+      docs.map((d, i) => {
+        const findings = mdocSentences(d.chunks, causeRx, 3);
+        return (
+          `**Doc ${label(i)} (_${d.title}_):**\n` +
+          (findings.length > 0 ? findings.map((f) => `- ${f}`).join('\n') : '- No causal chains identified')
+        );
+      }).join('\n\n')),
+    '',
+    sec('Final Comparative Brief',
+      `Comparison generated from **${chunks.length}** retrieved chunks across **${docs.length}** documents.\n\n` +
+      docs.map((d, i) => `- **Document ${label(i)}** (_${d.title}_): ${d.chunks.length} chunk${d.chunks.length !== 1 ? 's' : ''}`).join('\n') +
+      '\n\nEnable Local AI or connect a server LLM for deeper cross-document analysis.'),
+  ].join('\n');
+}
+
+// ── Debate report builder ─────────────────────────────────────────────────────
+
+function buildDebateReport(chunks: HybridSearchResult[]): string {
+  const NOT_FOUND = '_Not found in the selected document chunks._';
+  const docs = groupByDocument(chunks);
+
+  if (docs.length < 2) {
+    return (
+      '**Debate Mode requires chunks from at least 2 documents.**\n\n' +
+      'Please select 2 or more documents with indexed chunks via the Vault tab.'
+    );
+  }
+
+  const label = (i: number) => String.fromCharCode(65 + i);
+  const docLabels = docs.map((d, i) => `- **Document ${label(i)}**: _${d.title}_`);
+  const yearRx = /\b(1[0-9]{3}|20[0-2][0-9])\b/;
+
+  const allYearSets = docs.map((d) => new Set(mdocYears(d.chunks)));
+  const commonYears = [...(allYearSets[0] ?? new Set<string>())].filter(
+    (y) => allYearSets.slice(1).every((s) => s.has(y)),
+  );
+
+  const docKeyPoints = (d: DocGroup, max = 4): string[] => {
+    const out: string[] = [];
+    for (const c of d.chunks) {
+      for (const l of c.content.split('\n')) {
+        const t = l.trim();
+        if (/^[-*•]\s+.{20,}/.test(t)) {
+          out.push(t.replace(/^[-*•]\s+/, ''));
+          if (out.length >= max) return out;
+        }
+      }
+    }
+    return out;
+  };
+
+  const positions = docs.map((d, i) => {
+    const sents = mdocSentences(d.chunks, undefined, 4);
+    const pts = docKeyPoints(d);
+    return (
+      `## Position of Document ${label(i)}: _${d.title}_\n` +
+      (sents.length > 0 ? sents.slice(0, 3).map((s) => `- ${s}`).join('\n') : NOT_FOUND) +
+      (pts.length > 0 ? '\n\n**Key claims:**\n' + pts.map((p) => `- ${p}`).join('\n') : '')
+    );
+  });
+
+  const sec = (title: string, content: string) => `## ${title}\n${content || NOT_FOUND}`;
+
+  return [
+    `# Structured Debate: Document Analysis`,
+    `> Debate Mode — **${docs.length}** documents, **${chunks.length}** retrieved chunks`,
+    '',
+    '**Debating documents:**',
+    docLabels.join('\n'),
+    '',
+    ...positions.map((p) => p + '\n'),
+    sec('Evidence from Each Document',
+      docs.map((d, i) => {
+        const sents = mdocSentences(d.chunks, undefined, 3);
+        return (
+          `**Document ${label(i)} (_${d.title}_):**\n` +
+          (sents.length > 0 ? sents.map((s) => `> ${s}`).join('\n\n') : NOT_FOUND)
+        );
+      }).join('\n\n')),
+    '',
+    sec('Strongest Arguments',
+      docs.map((d, i) => {
+        const factual = mdocSentences(d.chunks, yearRx, 3).filter((s) => yearRx.test(s));
+        return `**Document ${label(i)}:** ${factual.length > 0 ? factual[0] : 'No specific factual claims identified from retrieved chunks.'}`;
+      }).join('\n\n')),
+    '',
+    sec('Weakest Arguments',
+      docs.map((d, i) => {
+        const uncertain = mdocSentences(d.chunks, /allegedly|reportedly|may have|might|unclear|debated|supposedly/i, 2);
+        return `**Document ${label(i)}:** ${uncertain.length > 0 ? uncertain[0] : 'No clearly weak or uncertain claims identified — retrieved chunks appear factual.'}`;
+      }).join('\n\n')),
+    '',
+    sec('Points of Agreement',
+      commonYears.length > 0
+        ? `Both documents reference the following time periods: **${commonYears.join(', ')}**`
+        : 'No direct common claims identified from retrieved chunks. Documents may cover distinct topics.'),
+    '',
+    sec('Points of Disagreement',
+      docs.map((d, i) => {
+        const contrasting = mdocSentences(d.chunks, /however|unlike|contrary|instead|whereas|but/i, 2);
+        return `**Document ${label(i)}:** ${contrasting.length > 0 ? contrasting[0] : 'No explicit disagreement identified from retrieved chunks.'}`;
+      }).join('\n\n')),
+    '',
+    sec('Neutral Judge Summary',
+      `Based on **${chunks.length}** retrieved chunks across **${docs.length}** documents:\n\n` +
+      docs.map((d, i) => {
+        const sents = mdocSentences(d.chunks, undefined, 2);
+        return `- **Document ${label(i)}** (_${d.title}_): ${sents.length > 0 ? (sents[0] ?? '').slice(0, 200) : 'Limited content retrieved.'}`;
+      }).join('\n') +
+      '\n\nThis comparison is deterministic — based on retrieved text. Enable Local AI for deeper synthesis.'),
+    '',
+    sec('Final Verdict',
+      `Debate summary across **${docs.length}** sources with **${chunks.length}** total chunks.\n` +
+      docs.map((d, i) => `- Document ${label(i)} (_${d.title}_): ${d.chunks.length} chunks`).join('\n') +
+      '\n\nFor a richer analytical verdict, enable Local AI (WebLLM) or connect a server LLM API.'),
+  ].join('\n');
+}
+
 // ── Research-report builder ───────────────────────────────────────────────────
 
 function buildResearchReport(chunks: HybridSearchResult[]): string {
@@ -513,6 +842,477 @@ function synthesizeFromChunks(query: string, chunks: HybridSearchResult[]): stri
   );
 }
 
+// ── Studio workflow detection ─────────────────────────────────────────────────
+
+type StudioWorkflow =
+  | 'study-pack' | 'action-items' | 'presentation' | 'blog-post'
+  | 'linkedin' | 'github-readme' | 'graphical-report' | 'transcript-summary'
+  | 'scene-breakdown' | 'video-script' | 'storyboard' | 'video-intel'
+  | 'knowledge-graph';
+
+function detectStudioWorkflow(query: string): StudioWorkflow | null {
+  const lc = query.toLowerCase();
+  if (lc.includes('generate a complete study pack')) return 'study-pack';
+  if (lc.includes('extract all action items')) return 'action-items';
+  if (lc.includes('10-slide presentation outline')) return 'presentation';
+  if (lc.includes('create a blog post')) return 'blog-post';
+  if (lc.includes('create a linkedin post')) return 'linkedin';
+  if (lc.includes('generate a github readme')) return 'github-readme';
+  if (lc.includes('graphical report with key statistics')) return 'graphical-report';
+  if (lc.includes('summarize this transcript')) return 'transcript-summary';
+  if (lc.includes('create a scene breakdown')) return 'scene-breakdown';
+  if (lc.includes('video script with hook')) return 'video-script';
+  if (lc.includes('storyboard with scene number')) return 'storyboard';
+  if (lc.includes('video intelligence report')) return 'video-intel';
+  if (lc.includes('build a knowledge graph')) return 'knowledge-graph';
+  return null;
+}
+
+// ── Studio workflow builders ──────────────────────────────────────────────────
+
+function studioNF(): string { return '_Not found in the selected document chunks._'; }
+
+function studioSec(title: string, content: string): string {
+  return `## ${title}\n${content || studioNF()}`;
+}
+
+function studioSentences(chunks: HybridSearchResult[], pattern?: RegExp, max = 5): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const c of chunks) {
+    for (const s of c.content.split(/(?<=[.!?])\s+/).map((x) => x.trim()).filter((x) => x.length > 25)) {
+      if ((!pattern || pattern.test(s)) && !seen.has(s)) {
+        seen.add(s);
+        out.push(s.replace(/\*\*(.+?)\*\*/g, '$1'));
+        if (out.length >= max) return out;
+      }
+    }
+  }
+  return out;
+}
+
+function studioHeadings(chunks: HybridSearchResult[]): string[] {
+  return chunks
+    .flatMap((c) => c.content.split('\n').filter((l) => /^#{1,3}\s/.test(l)).map((l) => l.replace(/^#+\s+/, '').trim()))
+    .filter(Boolean);
+}
+
+function buildStudyPack(chunks: HybridSearchResult[]): string {
+  const docTitle = chunks[0]?.title ?? 'the document';
+  const allText = chunks.map((c) => c.content).join('\n\n');
+  const headings = studioHeadings(chunks);
+  const yearRx = /\b(1[0-9]{3}|20[0-2][0-9])\b/;
+
+  const glossary: string[] = [];
+  for (const m of allText.matchAll(/\b([A-Za-z][a-z]+(?:\s+[A-Za-z][a-z]+){0,3})\s+(?:is|are|refers?\s+to|means?|denotes?)\s+([^.!?]{20,100})/g)) {
+    if (glossary.length >= 10) break;
+    glossary.push(`- **${m[1]}**: ${(m[2].split(/[.!?]/)[0] ?? '').trim()}`);
+  }
+
+  const keyFacts = studioSentences(chunks, yearRx, 8);
+  const flashcards = keyFacts.slice(0, 6).map((s, i) =>
+    `**Q${i + 1}**: Describe the significance of: _"${s.slice(0, 120)}"_\n**A${i + 1}**: ${s.slice(0, 200)}`,
+  );
+  const examQ = keyFacts.map((s, i) => {
+    const yr = s.match(yearRx)?.[0];
+    return `${i + 1}. ${yr ? `What happened in **${yr}**?` : `Explain: "${s.slice(0, 100)}"`}`;
+  });
+  const notes = chunks.slice(0, 5).map((c, i) => {
+    const note = c.content.replace(/^#{1,6}\s+.+$/gm, '').split(/(?<=[.!?])\s+/).find((s) => s.trim().length > 40);
+    return note ? `${i + 1}. ${note.replace(/\*\*(.+?)\*\*/g, '$1').trim().slice(0, 220)}` : '';
+  }).filter(Boolean);
+
+  return [
+    `# Study Pack: ${docTitle}`,
+    `> Generated from **${chunks.length}** retrieved chunks.`,
+    '',
+    studioSec('Key Concepts', headings.length > 0 ? headings.slice(0, 10).map((h) => `- ${h}`).join('\n') : ''),
+    '',
+    studioSec('Definitions & Glossary', glossary.join('\n')),
+    '',
+    studioSec('Flashcards (Q&A)', flashcards.join('\n\n')),
+    '',
+    studioSec('Exam Questions', examQ.join('\n')),
+    '',
+    studioSec('Summary Notes', notes.join('\n')),
+    '',
+    studioSec('Mind Map Outline', headings.length > 0 ? `- ${docTitle}\n${headings.slice(0, 8).map((h) => `  - ${h}`).join('\n')}` : ''),
+  ].join('\n');
+}
+
+function buildActionItems(chunks: HybridSearchResult[]): string {
+  const docTitle = chunks[0]?.title ?? 'the document';
+  const taskRx = /\b(should|must|will|need to|required to|responsible for|action|task|complete|submit|deliver|report|schedule|review|follow up|deadline|due|assign)\b/i;
+  const yearRx = /\b(1[0-9]{3}|20[0-2][0-9])\b/;
+  const tasks = studioSentences(chunks, taskRx, 10);
+  const deadlines = studioSentences(chunks, yearRx, 6);
+  const decisions = studioSentences(chunks, /decided|agreed|confirmed|resolved|approved|rejected/i, 5);
+  const questions = studioSentences(chunks, /\?|unclear|unknown|pending|open question/i, 5);
+
+  return [
+    `# Action Items: ${docTitle}`,
+    `> Extracted from **${chunks.length}** retrieved chunks.`,
+    '',
+    studioSec('Action Items', tasks.length > 0 ? tasks.map((t) => `- [ ] ${t}`).join('\n') : ''),
+    '',
+    studioSec('Dates & Deadlines', deadlines.length > 0 ? deadlines.map((d) => `- ${d}`).join('\n') : ''),
+    '',
+    studioSec('Decisions Made', decisions.length > 0 ? decisions.map((d) => `- ${d}`).join('\n') : ''),
+    '',
+    studioSec('Open Questions', questions.length > 0 ? questions.map((q) => `- ${q}`).join('\n') : ''),
+    '',
+    studioSec('Next Steps', tasks.slice(0, 3).map((t, i) => `${i + 1}. ${t}`).join('\n')),
+  ].join('\n');
+}
+
+function buildPresentation(chunks: HybridSearchResult[]): string {
+  const docTitle = chunks[0]?.title ?? 'Document';
+  const slideCount = Math.min(chunks.length + 2, 10);
+
+  const slideFromChunk = (c: HybridSearchResult, slideNum: number): string => {
+    const heading = c.content.split('\n').find((l) => /^#{1,3}\s/.test(l))?.replace(/^#+\s+/, '') ?? `Section ${slideNum}`;
+    const bullets = c.content.replace(/^#{1,6}\s+.+$/gm, '')
+      .split(/(?<=[.!?])\s+/).filter((s) => s.length > 30).slice(0, 3)
+      .map((s) => `- ${s.replace(/\*\*(.+?)\*\*/g, '$1').trim().slice(0, 130)}`).join('\n');
+    const note = c.content.split(/(?<=[.!?])\s+/).find((s) => s.length > 50) ?? '';
+    return (
+      `## Slide ${slideNum}: ${heading}\n**Bullets:**\n${bullets || studioNF()}\n\n` +
+      `**Speaker Notes:** ${note.replace(/\*\*(.+?)\*\*/g, '$1').trim().slice(0, 200) || studioNF()}\n\n` +
+      `**Suggested Visual:** [Diagram or image illustrating "${heading}"]`
+    );
+  };
+
+  const intro = studioSentences(chunks.slice(0, 1), undefined, 3).map((s) => `- ${s.slice(0, 150)}`).join('\n');
+  const conclusion = studioSentences(chunks.slice(-2), undefined, 3).map((s) => `- ${s.slice(0, 150)}`).join('\n');
+  const midSlides = chunks.slice(0, slideCount - 2).map((c, i) => slideFromChunk(c, i + 2));
+
+  return [
+    `# Presentation Outline: ${docTitle}`,
+    `> **${slideCount} slides** from **${chunks.length}** retrieved chunks.`,
+    '',
+    `## Slide 1: Title & Overview\n**Title:** ${docTitle}\n**Bullets:**\n${intro || studioNF()}\n**Speaker Notes:** Welcome. Today we explore _${docTitle}_.\n**Suggested Visual:** [Title card with document name]`,
+    '',
+    ...midSlides.map((s) => s + '\n'),
+    `## Slide ${slideCount}: Conclusion & Q&A\n**Bullets:**\n${conclusion || studioNF()}\n**Speaker Notes:** Summary of key findings. Open for questions.\n**Suggested Visual:** [Summary diagram or key takeaway card]`,
+  ].join('\n');
+}
+
+function buildBlogPost(chunks: HybridSearchResult[]): string {
+  const docTitle = chunks[0]?.title ?? 'the document';
+  const sections = chunks.slice(0, 3).map((c, i) => {
+    const heading = c.content.split('\n').find((l) => /^#{1,3}\s/.test(l))?.replace(/^#+\s+/, '') ?? `Section ${i + 1}`;
+    const body = studioSentences([c], undefined, 3).join(' ');
+    return `## ${heading}\n${body || studioNF()}`;
+  });
+  const intro = studioSentences(chunks.slice(0, 1), undefined, 2).join(' ');
+  const conclusion = studioSentences(chunks.slice(-1), undefined, 2).join(' ');
+  const headings = studioHeadings(chunks);
+  const tags = headings.slice(0, 5).map((h) => `#${h.toLowerCase().replace(/[^a-z0-9]/g, '')}`).filter(Boolean).join(' ');
+
+  return [
+    `# Blog Post: ${docTitle}`,
+    '',
+    `## Blog Title\n**${docTitle}: Key Insights and Analysis**`,
+    '',
+    `## Introduction\n${intro || studioNF()}`,
+    '',
+    ...sections.map((s) => s + '\n'),
+    `## Key Takeaways`,
+    studioSentences(chunks, undefined, 3).map((s, i) => `${i + 1}. ${s.slice(0, 180)}`).join('\n') || studioNF(),
+    '',
+    `## Conclusion\n${conclusion || studioNF()}`,
+    '',
+    `## Tags & Meta\n**Tags:** ${tags || '#research #analysis'}\n**Meta Description:** An analysis of _${docTitle}_ covering key insights and findings.`,
+  ].join('\n');
+}
+
+function buildLinkedIn(chunks: HybridSearchResult[]): string {
+  const docTitle = chunks[0]?.title ?? 'this research';
+  const sentences = studioSentences(chunks, undefined, 6);
+  const hook = sentences[0] ?? `Exploring ${docTitle}.`;
+  const points = sentences.slice(1, 4).map((s) => `→ ${s.slice(0, 150)}`);
+  const headings = studioHeadings(chunks);
+  const hashtags = [...new Set(headings.slice(0, 5))].map((h) => `#${h.toLowerCase().replace(/[^a-z0-9]/g, '')}`).filter(Boolean).join(' ');
+
+  return [
+    `# LinkedIn Post: ${docTitle}`,
+    '',
+    `## Hook\n${hook}`,
+    '',
+    `## Key Insight\n${sentences[1] ?? studioNF()}`,
+    '',
+    `## Supporting Points\n${points.length > 0 ? points.join('\n') : studioNF()}`,
+    '',
+    `## Call to Action\nWhat are your thoughts on _${docTitle}_? Share below. 👇`,
+    '',
+    `## Hashtags\n${hashtags || '#research #knowledge #ai'}`,
+  ].join('\n');
+}
+
+function buildGitHubReadme(chunks: HybridSearchResult[]): string {
+  const docTitle = chunks[0]?.title ?? 'Project';
+  const overview = studioSentences(chunks.slice(0, 2), undefined, 3).join(' ');
+  const headings = studioHeadings(chunks);
+  const features = headings.slice(0, 6).map((h) => `- ${h}`).join('\n');
+  const techSentences = studioSentences(chunks, /technolog|framework|library|tool|built with|uses/i, 5);
+
+  return [
+    `# ${docTitle}`,
+    '',
+    `## Overview\n${overview || studioNF()}`,
+    '',
+    `## Features\n${features || studioNF()}`,
+    '',
+    `## Architecture\n${techSentences.length > 0 ? techSentences.map((s) => `- ${s}`).join('\n') : studioNF()}`,
+    '',
+    `## Installation\n\`\`\`bash\n# See documentation for installation steps\n\`\`\``,
+    '',
+    `## Usage\n${studioSentences(chunks, /how to|usage|getting started|example/i, 2).map((s) => `- ${s}`).join('\n') || studioNF()}`,
+    '',
+    `## Contributing\nContributions welcome. Please open an issue or pull request.`,
+    '',
+    `## License\n_See document for licensing information._`,
+    '',
+    `---\n*Generated from retrieved knowledge chunks of _${docTitle}_.*`,
+  ].join('\n');
+}
+
+function buildGraphicalReport(chunks: HybridSearchResult[]): string {
+  const docTitle = chunks[0]?.title ?? 'the document';
+  const years = mdocYears(chunks);
+  const persons = mdocNames(chunks);
+  const places = mdocPlaces(chunks);
+  const yearRx = /\b(1[0-9]{3}|20[0-2][0-9])\b/;
+  const timelineRows = studioSentences(chunks, yearRx, 10).map((s) => {
+    const yr = s.match(yearRx)?.[0] ?? '';
+    return `| ${yr} | ${s.slice(0, 140)} |`;
+  });
+  const numbers = [...chunks.map((c) => c.content).join('\n').matchAll(/\b(\d[\d,]*(?:\.\d+)?)\s*(%|million|billion|thousand|percent|km|km²|people|years?)\b/gi)]
+    .slice(0, 10).map((m) => `| ${m[1]} ${m[2]} | See source |`);
+  const causeRx = /because|led to|resulted in|caused|due to|therefore|consequently/i;
+
+  return [
+    `# Graphical Report: ${docTitle}`,
+    `> Generated from **${chunks.length}** chunks. Use these tables in your charts and slides.`,
+    '',
+    studioSec('Key Statistics & Numbers',
+      numbers.length > 0 ? '| Value | Context |\n|---|---|\n' + numbers.join('\n') : ''),
+    '',
+    studioSec('Timeline Data',
+      timelineRows.length > 0 ? '| Year | Event |\n|---|---|\n' + timelineRows.join('\n') : ''),
+    '',
+    studioSec('People & Organizations',
+      persons.length > 0 ? '| Name |\n|---|\n' + persons.map((n) => `| ${n} |`).join('\n') : ''),
+    '',
+    studioSec('Places & Locations',
+      places.length > 0 ? '| Place |\n|---|\n' + places.map((p) => `| ${p} |`).join('\n') : ''),
+    '',
+    studioSec('Events Table',
+      studioSentences(chunks, /war|battle|independence|election|treaty|movement|liberation/i, 8)
+        .map((s, i) => `| ${i + 1} | ${s.slice(0, 140)} |`).length > 0
+        ? '| # | Event |\n|---|---|\n' + studioSentences(chunks, /war|battle|independence|election|treaty|movement|liberation/i, 8).map((s, i) => `| ${i + 1} | ${s.slice(0, 140)} |`).join('\n')
+        : ''),
+    '',
+    studioSec('Cause-Effect Map', studioSentences(chunks, causeRx, 5).map((s) => `- ${s}`).join('\n')),
+    '',
+    studioSec('Recommended Visualisations',
+      [
+        years.length > 2 ? `- **Timeline chart** — plot events by year: ${years.slice(0, 5).join(', ')}` : null,
+        persons.length > 0 ? `- **Network graph** — show relationships between: ${persons.slice(0, 3).join(', ')}` : null,
+        places.length > 0 ? `- **Map** — highlight locations: ${places.slice(0, 3).join(', ')}` : null,
+        '- **Bar chart** — compare statistics from the evidence table',
+      ].filter(Boolean).join('\n')),
+  ].join('\n');
+}
+
+function buildTranscriptSummary(chunks: HybridSearchResult[]): string {
+  const docTitle = chunks[0]?.title ?? 'the transcript';
+  const topics = studioHeadings(chunks);
+  const quotes = studioSentences(chunks, /"[^"]{20,}"|'[^']{20,}'/, 5);
+  const actions = studioSentences(chunks, /should|must|will|need to|action|follow up|next step/i, 5);
+
+  return [
+    `# Transcript Summary: ${docTitle}`,
+    `> Generated from **${chunks.length}** transcript chunks.`,
+    '',
+    studioSec('Executive Summary', studioSentences(chunks, undefined, 4).join(' ')),
+    '',
+    studioSec('Topics Covered', topics.length > 0 ? topics.slice(0, 8).map((t) => `- ${t}`).join('\n') : ''),
+    '',
+    studioSec('Key Moments', studioSentences(chunks, /important|key|critical|significant|highlight|moment/i, 6).map((s) => `- ${s}`).join('\n')),
+    '',
+    studioSec('Quotes & Highlights', quotes.length > 0 ? quotes.map((q) => `> ${q}`).join('\n\n') : ''),
+    '',
+    studioSec('Action Items', actions.length > 0 ? actions.map((a) => `- [ ] ${a}`).join('\n') : ''),
+    '',
+    studioSec('Conclusion', studioSentences(chunks.slice(-2), undefined, 2).join(' ')),
+  ].join('\n');
+}
+
+function buildSceneBreakdown(chunks: HybridSearchResult[]): string {
+  const docTitle = chunks[0]?.title ?? 'the document';
+  const sceneChunks = chunks.slice(0, 10);
+
+  const sceneCards = sceneChunks.map((c, i) => {
+    const heading = c.content.split('\n').find((l) => /^#{1,3}\s/.test(l))?.replace(/^#+\s+/, '') ?? `Scene ${i + 1}`;
+    const narration = c.content.replace(/^#{1,6}\s+.+$/gm, '').split(/(?<=[.!?])\s+/).find((s) => s.length > 30) ?? '';
+    return (
+      `## Scene ${i + 1}: ${heading}\n` +
+      `**Visual Idea:** [Shot of ${heading} — wide/close-up depending on context]\n` +
+      `**Narration:** ${narration.replace(/\*\*(.+?)\*\*/g, '$1').trim().slice(0, 200) || studioNF()}\n` +
+      `**On-screen Text:** ${heading}\n` +
+      `**Source Note:** _${c.title}_`
+    );
+  });
+
+  return [`# Scene Breakdown: ${docTitle}`, '', ...sceneCards.map((s) => s + '\n')].join('\n');
+}
+
+function buildVideoScript(chunks: HybridSearchResult[]): string {
+  const docTitle = chunks[0]?.title ?? 'the document';
+  const allSentences = studioSentences(chunks, undefined, 12);
+  const hook = allSentences[0] ?? `Did you know about ${docTitle}?`;
+  const sceneNarrations = chunks.slice(0, 5).map((c, i) => {
+    const narration = c.content.replace(/^#{1,6}\s+.+$/gm, '').split(/(?<=[.!?])\s+/).filter((s) => s.length > 30).slice(0, 2).map((s) => s.replace(/\*\*(.+?)\*\*/g, '$1').trim()).join(' ');
+    return `### Scene ${i + 2}: ${c.content.split('\n').find((l) => /^#{1,3}\s/.test(l))?.replace(/^#+\s+/, '') ?? `Part ${i + 2}`}\n**Narration:** ${narration || studioNF()}\n**Visual Direction:** [B-roll or graphic supporting the narration]`;
+  });
+
+  return [
+    `# Video Script: ${docTitle}`,
+    '',
+    `## Hook (opening 15 seconds)\n**Narration:** "${hook}"\n**Visual:** [Eye-catching opening shot]`,
+    '',
+    `### Scene 1: Setup\n**Narration:** Today we explore _${docTitle}_ — here's what you need to know.\n**Visual:** [Title card]`,
+    '',
+    ...sceneNarrations.map((s) => s + '\n'),
+    `## Narration Script\n${allSentences.slice(0, 8).map((s) => `> ${s}`).join('\n\n')}`,
+    '',
+    `## Caption Text\n${allSentences.slice(0, 4).map((s) => `[${s.slice(0, 80)}]`).join('\n')}`,
+    '',
+    `## Ending & CTA\n**Narration:** That's all for today. If you found this useful, like and share.\n**Visual:** [End card with subscribe button]`,
+  ].join('\n');
+}
+
+function buildStoryboard(chunks: HybridSearchResult[]): string {
+  const docTitle = chunks[0]?.title ?? 'the document';
+  const sceneChunks = chunks.slice(0, 10);
+  const rows = sceneChunks.map((c, i) => {
+    const heading = c.content.split('\n').find((l) => /^#{1,3}\s/.test(l))?.replace(/^#+\s+/, '') ?? `Scene ${i + 1}`;
+    const narration = c.content.replace(/^#{1,6}\s+.+$/gm, '').split(/(?<=[.!?])\s+/).find((s) => s.length > 30) ?? '';
+    return `| ${i + 1} | [${heading}] | ${narration.replace(/\*\*(.+?)\*\*/g, '$1').trim().slice(0, 100) || studioNF()} | ${heading} | _${c.title}_ |`;
+  });
+
+  return [
+    `# Storyboard: ${docTitle}`,
+    `> **${sceneChunks.length}** scenes from **${chunks.length}** retrieved chunks.`,
+    '',
+    '| Scene | Visual Idea | Narration | On-screen Text | Source |',
+    '|---|---|---|---|---|',
+    ...rows,
+    '',
+    `*All scenes grounded in retrieved content from _${docTitle}_.*`,
+  ].join('\n');
+}
+
+function buildVideoIntel(chunks: HybridSearchResult[]): string {
+  const docTitle = chunks[0]?.title ?? 'the document';
+  const persons = mdocNames(chunks);
+  const places = mdocPlaces(chunks);
+  const years = mdocYears(chunks);
+  const headings = studioHeadings(chunks);
+  const yearRx = /\b(1[0-9]{3}|20[0-2][0-9])\b/;
+
+  return [
+    `# Video Intelligence Report: ${docTitle}`,
+    `> Analysed **${chunks.length}** chunks from _${docTitle}_.`,
+    '',
+    studioSec('Content Overview', studioSentences(chunks, undefined, 3).join(' ')),
+    '',
+    studioSec('Key Topics & Segments', headings.slice(0, 8).map((h) => `- ${h}`).join('\n')),
+    '',
+    studioSec('Named Entities',
+      [
+        persons.length > 0 ? `**People:** ${persons.slice(0, 6).join(', ')}` : null,
+        places.length > 0 ? `**Places:** ${places.slice(0, 6).join(', ')}` : null,
+      ].filter(Boolean).join('\n')),
+    '',
+    studioSec('Timeline of Events', studioSentences(chunks, yearRx, 8).map((s) => {
+      const yr = s.match(yearRx)?.[0] ?? '';
+      return `- **${yr}**: ${s.slice(0, 160)}`;
+    }).join('\n')),
+    '',
+    studioSec('Key Quotes', studioSentences(chunks, /"[^"]{15,}"/, 5).map((s) => `> ${s}`).join('\n\n')),
+    '',
+    studioSec('Recommended Clips',
+      chunks.slice(0, 5).map((c, i) => {
+        const first = c.content.replace(/^#{1,6}\s+.+$/gm, '').split(/(?<=[.!?])\s+/).find((s) => s.length > 30);
+        return `- **Clip ${i + 1}** (_${c.title}_): "${first?.replace(/\*\*(.+?)\*\*/g, '$1').trim().slice(0, 120) ?? 'See source'}"`;
+      }).join('\n')),
+    '',
+    studioSec('Media Intelligence Summary',
+      `Report covers ${headings.length} topics, ${persons.length} named people, ${places.length} locations, and events spanning ${years.slice(0, 3).join(' – ')}.`),
+  ].join('\n');
+}
+
+function buildKnowledgeGraph(chunks: HybridSearchResult[]): string {
+  const docTitle = chunks[0]?.title ?? 'the document';
+  const persons = mdocNames(chunks);
+  const places = mdocPlaces(chunks);
+  const years = mdocYears(chunks);
+  const headings = studioHeadings(chunks);
+  const allText = chunks.map((c) => c.content).join('\n\n');
+
+  const orgs: string[] = [];
+  for (const m of allText.matchAll(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\s+(?:Organization|Organisation|Institute|University|College|Ministry|Government|Party|League|Council|Committee|Commission|Foundation)/g)) {
+    orgs.push(m[0].replace(/\*\*(.+?)\*\*/g, '$1').trim().slice(0, 60));
+    if (orgs.length >= 8) break;
+  }
+
+  const freqTable = [...new Set([...persons, ...places, ...headings])].slice(0, 10).map((entity) => {
+    const count = (allText.match(new RegExp(entity.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')) ?? []).length;
+    return `| ${entity} | ${count} |`;
+  });
+
+  return [
+    `# Knowledge Graph: ${docTitle}`,
+    `> Entity extraction from **${chunks.length}** retrieved chunks.`,
+    '',
+    studioSec('Person Entities', persons.length > 0 ? persons.map((p) => `- **Person**: ${p}`).join('\n') : ''),
+    '',
+    studioSec('Place Entities', places.length > 0 ? places.map((p) => `- **Place**: ${p}`).join('\n') : ''),
+    '',
+    studioSec('Organisation Entities', orgs.length > 0 ? orgs.map((o) => `- **Org**: ${o}`).join('\n') : ''),
+    '',
+    studioSec('Date / Time Entities', years.length > 0 ? years.map((y) => `- **Year**: ${y}`).join('\n') : ''),
+    '',
+    studioSec('Concept Entities', headings.length > 0 ? headings.slice(0, 10).map((h) => `- **Concept**: ${h}`).join('\n') : ''),
+    '',
+    studioSec('Entity Frequency Table',
+      freqTable.length > 0 ? '| Entity | Mentions |\n|---|---|\n' + freqTable.join('\n') : ''),
+    '',
+    studioSec('Graph Summary',
+      `${persons.length} persons · ${places.length} places · ${orgs.length} orgs · ${years.length} dates · ${headings.length} concepts`),
+  ].join('\n');
+}
+
+function buildStudioWorkflowReport(workflow: StudioWorkflow, chunks: HybridSearchResult[]): string {
+  switch (workflow) {
+    case 'study-pack':        return buildStudyPack(chunks);
+    case 'action-items':      return buildActionItems(chunks);
+    case 'presentation':      return buildPresentation(chunks);
+    case 'blog-post':         return buildBlogPost(chunks);
+    case 'linkedin':          return buildLinkedIn(chunks);
+    case 'github-readme':     return buildGitHubReadme(chunks);
+    case 'graphical-report':  return buildGraphicalReport(chunks);
+    case 'transcript-summary':return buildTranscriptSummary(chunks);
+    case 'scene-breakdown':   return buildSceneBreakdown(chunks);
+    case 'video-script':      return buildVideoScript(chunks);
+    case 'storyboard':        return buildStoryboard(chunks);
+    case 'video-intel':       return buildVideoIntel(chunks);
+    case 'knowledge-graph':   return buildKnowledgeGraph(chunks);
+  }
+}
+
 function buildLiteResponse(query: string): AivoraAgentResponse {
   return {
     answer:
@@ -604,8 +1404,10 @@ async function runAgentLoop(
     retrievalSummary += ` Retried with rewritten query: "${correction.rewrittenQuery}". Got ${retryChunks.length} chunk(s).`;
   }
 
-  // Rerank — research reports get more chunks for richer section coverage.
-  const rerankCount = isAutoResearchReport(query) ? 8 : 5;
+  // Rerank — research/compare/debate/studio modes get more chunks for richer coverage.
+  const isMultiDocMode = isCompareDocuments(query) || isDebateMode(query);
+  const isStructuredMode = isAutoResearchReport(query) || isMultiDocMode || detectStudioWorkflow(query) !== null;
+  const rerankCount = isStructuredMode ? 8 : 5;
   const topChunks = rerank(finalChunks, rerankCount);
 
   console.log('[aivora-agent] top chunks after rerank:', topChunks.length);
@@ -683,6 +1485,58 @@ async function runAgentLoop(
         reasoningTrace: {
           ...baseTrace,
           reflection: `Auto Research Report generated from ${topChunks.length} chunk(s). All 20 sections populated deterministically from retrieved text.`,
+        },
+        citations,
+        confidence: Math.max(Math.round(reflection.confidence * 100) / 100, 0.65),
+        needsMoreContext: false,
+        needsLocalLLM: false,
+        retrievedContext,
+      };
+    }
+
+    if (isCompareDocuments(query)) {
+      console.info('[aivora-agent] Compare Documents detected — building deterministic comparison report.');
+      const report = buildComparisonReport(topChunks);
+      return {
+        answer: report,
+        reasoningTrace: {
+          ...baseTrace,
+          reflection: `Document comparison generated from ${topChunks.length} chunk(s) across ${groupByDocument(topChunks).length} document(s).`,
+        },
+        citations,
+        confidence: Math.max(Math.round(reflection.confidence * 100) / 100, 0.65),
+        needsMoreContext: false,
+        needsLocalLLM: false,
+        retrievedContext,
+      };
+    }
+
+    if (isDebateMode(query)) {
+      console.info('[aivora-agent] Debate Mode detected — building deterministic debate report.');
+      const report = buildDebateReport(topChunks);
+      return {
+        answer: report,
+        reasoningTrace: {
+          ...baseTrace,
+          reflection: `Debate analysis generated from ${topChunks.length} chunk(s) across ${groupByDocument(topChunks).length} document(s).`,
+        },
+        citations,
+        confidence: Math.max(Math.round(reflection.confidence * 100) / 100, 0.65),
+        needsMoreContext: false,
+        needsLocalLLM: false,
+        retrievedContext,
+      };
+    }
+
+    const studioWorkflow = detectStudioWorkflow(query);
+    if (studioWorkflow !== null) {
+      console.info(`[aivora-agent] Studio workflow "${studioWorkflow}" detected — building deterministic output.`);
+      const report = buildStudioWorkflowReport(studioWorkflow, topChunks);
+      return {
+        answer: report,
+        reasoningTrace: {
+          ...baseTrace,
+          reflection: `Studio workflow "${studioWorkflow}" generated from ${topChunks.length} chunk(s) deterministically.`,
         },
         citations,
         confidence: Math.max(Math.round(reflection.confidence * 100) / 100, 0.65),
