@@ -426,7 +426,8 @@ export function AgentChat({
               <div>
                 <p className="text-white/40 text-sm font-medium mb-1">Ask Aivora anything</p>
                 <p className="text-white/20 text-xs max-w-xs leading-relaxed">
-                  Every answer is grounded in your uploaded knowledge documents. Upload files via Admin to get started.
+                  Every answer is grounded in your uploaded knowledge documents. Open the{' '}
+                  <span className="text-cyan-400/50 font-mono">Vault</span> tab to upload files and enable grounded retrieval.
                 </p>
               </div>
               {mounted && isWebGPUSupported() && (

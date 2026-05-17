@@ -17,6 +17,7 @@ import {
   Upload,
   HeartPulse,
   Zap,
+  HardDrive,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -25,6 +26,7 @@ import { AgentChat } from '@/components/dashboard/chat/AgentChat';
 import { ReasoningTimeline } from '@/components/dashboard/chat/ReasoningTimeline';
 import { SourceCitationPanel } from '@/components/dashboard/panels/SourceCitationPanel';
 import { SystemAnalyticsPanel } from '@/components/dashboard/panels/SystemAnalyticsPanel';
+import { KnowledgeVaultPanel } from '@/components/dashboard/panels/KnowledgeVaultPanel';
 import { CommandPalette, type PaletteCommand } from '@/components/dashboard/command/CommandPalette';
 import { cn } from '@/lib/utils/cn';
 import type { AgentPhase, ReasoningTrace, SystemMode, AgentAnalytics } from '@/lib/types/agent';
@@ -44,7 +46,7 @@ const AgentGraph = dynamic(
   { ssr: false, loading: () => <div className="flex-1 flex items-center justify-center text-white/20 text-xs font-mono">Loading graph…</div> }
 );
 
-type RightTab = 'citations' | 'analytics' | 'graph';
+type RightTab = 'citations' | 'analytics' | 'graph' | 'vault';
 
 type RightTabButtonProps = {
   tab: RightTab;
@@ -199,10 +201,10 @@ export function AivoraShell() {
     },
     {
       id: 'upload',
-      label: 'Upload Knowledge',
-      description: 'Go to Admin → Documents to upload files',
+      label: 'Open Knowledge Vault',
+      description: 'Switch to the Vault tab to upload and index documents',
       icon: Upload,
-      action: () => { window.location.href = '/admin/documents'; },
+      action: () => setRightTab('vault'),
     },
     {
       id: 'webllm',
@@ -378,10 +380,11 @@ export function AivoraShell() {
         {/* Right — Tabbed panel (Citations | Analytics | Graph) */}
         <div className="hidden xl:flex flex-col w-80 flex-shrink-0">
           {/* Tab bar */}
-          <div className="flex items-center gap-1 mb-2 flex-shrink-0">
+          <div className="flex items-center gap-1 mb-2 flex-shrink-0 flex-wrap">
             <RightTabButton tab="citations" icon={FileSearch} label="Sources" activeTab={rightTab} onSelect={setRightTab} />
             <RightTabButton tab="analytics" icon={BarChart3} label="Analytics" activeTab={rightTab} onSelect={setRightTab} />
             <RightTabButton tab="graph" icon={Network} label="Graph" activeTab={rightTab} onSelect={setRightTab} />
+            <RightTabButton tab="vault" icon={HardDrive} label="Vault" activeTab={rightTab} onSelect={setRightTab} />
           </div>
 
           {/* Tab content */}
@@ -400,6 +403,9 @@ export function AivoraShell() {
             )}
             {rightTab === 'graph' && (
               <AgentGraph phase={phase} systemMode={systemMode} className="h-full" />
+            )}
+            {rightTab === 'vault' && (
+              <KnowledgeVaultPanel className="h-full" />
             )}
           </div>
         </div>
