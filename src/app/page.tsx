@@ -185,7 +185,7 @@ export default function LandingPage() {
             Launch Dashboard
           </Link>
           <a
-            href="https://github.com/fokrulislam/aivora"
+            href="https://github.com/fokrulanthro16-eng/aivora"
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-2 px-6 py-3.5 rounded-2xl
@@ -365,7 +365,7 @@ export default function LandingPage() {
           {' · '}Aivora v0.2.0
           {' · '}
           <a
-            href="https://github.com/fokrulislam/aivora"
+            href="https://github.com/fokrulanthro16-eng/aivora"
             target="_blank"
             rel="noopener noreferrer"
             className="text-white/30 hover:text-cyan-400/60 transition-colors"
