@@ -120,6 +120,8 @@ export function AivoraShell() {
   const [webgpuAvailable, setWebgpuAvailable] = useState(false);
   const [webllmReady, setWebllmReady] = useState(false);
   const [vaultAction, setVaultAction] = useState<{ query: string; documentId?: string; documentIds?: string[] } | null>(null);
+  const [docCount, setDocCount]       = useState<number | null>(null);
+  const [healthOk, setHealthOk]       = useState<boolean | null>(null);
 
   const supabaseConnected = !!(
     process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -129,6 +131,27 @@ export function AivoraShell() {
   // Detect WebGPU after mount — keeps server render stable (false) to prevent hydration mismatch.
   useEffect(() => {
     void Promise.resolve(isWebGPUSupported()).then(setWebgpuAvailable);
+  }, []);
+
+  // Fetch system health + doc count once on mount (non-critical — failures are silently swallowed).
+  useEffect(() => {
+    async function fetchSystemStatus() {
+      try {
+        const [healthRes, docsRes] = await Promise.all([
+          fetch('/api/health'),
+          fetch('/api/documents'),
+        ]);
+        const healthData = (await healthRes.json()) as { status?: string };
+        setHealthOk(healthData.status === 'healthy');
+        if (docsRes.ok) {
+          const docsData = (await docsRes.json()) as { ok?: boolean; documents?: unknown[] };
+          setDocCount(docsData.documents?.length ?? 0);
+        }
+      } catch {
+        // Health is non-critical — no toast
+      }
+    }
+    void fetchSystemStatus();
   }, []);
 
   // Ctrl+K to open command palette
@@ -386,6 +409,46 @@ export function AivoraShell() {
                 </span>
               </div>
             ))}
+          </div>
+
+          {/* System health summary */}
+          <div className="w-full rounded-xl bg-white/[0.02] border border-white/6 px-3 py-3">
+            <p className="text-[9px] font-mono uppercase tracking-widest text-white/20 mb-2.5">
+              System Health
+            </p>
+            <div className="space-y-1.5">
+              {([
+                { label: 'Supabase',      ok: supabaseConnected,  hint: supabaseConnected ? 'connected' : 'missing env' },
+                { label: 'pgvector',      ok: supabaseConnected,  hint: supabaseConnected ? 'ready' : 'unavailable'    },
+                { label: 'Local Embedder',ok: true,               hint: 'MiniLM-L6-v2'                                  },
+                { label: 'Browser LLM',  ok: webgpuAvailable,    hint: webgpuAvailable ? 'WebGPU ready' : 'no WebGPU' },
+                { label: 'API health',   ok: healthOk ?? false,  hint: healthOk === null ? 'checking…' : healthOk ? 'healthy' : 'degraded' },
+              ] as const).map(({ label, ok, hint }) => (
+                <div key={label} className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <motion.div
+                      className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', ok ? 'bg-emerald-400' : 'bg-amber-400')}
+                      animate={ok ? { opacity: [1, 0.4, 1] } : {}}
+                      transition={{ duration: 2.5, repeat: Infinity }}
+                    />
+                    <span className="text-[9px] font-mono text-white/35 truncate">{label}</span>
+                  </div>
+                  <span className={cn('text-[9px] font-mono flex-shrink-0', ok ? 'text-emerald-400/70' : 'text-amber-400/70')}>
+                    {hint}
+                  </span>
+                </div>
+              ))}
+              {/* Doc count */}
+              <div className="flex items-center justify-between gap-2 pt-1.5 mt-0.5 border-t border-white/5">
+                <div className="flex items-center gap-1.5">
+                  <HardDrive className="w-2.5 h-2.5 text-cyan-400/50 flex-shrink-0" />
+                  <span className="text-[9px] font-mono text-white/35">Docs indexed</span>
+                </div>
+                <span className="text-[9px] font-mono text-cyan-300">
+                  {docCount === null ? '—' : docCount}
+                </span>
+              </div>
+            </div>
           </div>
         </div>
 

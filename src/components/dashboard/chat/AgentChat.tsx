@@ -22,6 +22,7 @@ import {
   Loader2,
   BookMarked,
   Presentation,
+  HardDrive,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { GlassPanel } from '@/components/dashboard/panels/GlassPanel';
@@ -780,25 +781,90 @@ export function AgentChat({
               key="welcome"
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              className="flex flex-col items-center justify-center h-full min-h-[200px] gap-4 text-center"
+              className="flex flex-col h-full min-h-[200px] gap-5 py-6 px-2"
             >
-              <motion.div
-                animate={{ opacity: [0.3, 0.6, 0.3] }}
-                transition={{ duration: 3, repeat: Infinity }}
-              >
-                <MessageSquare className="w-10 h-10 text-cyan-400/20" />
-              </motion.div>
-              <div>
-                <p className="text-white/40 text-sm font-medium mb-1">Ask Aivora anything</p>
-                <p className="text-white/20 text-xs max-w-xs leading-relaxed">
-                  Every answer is grounded in your uploaded knowledge documents. Open the{' '}
-                  <span className="text-cyan-400/50 font-mono">Vault</span> tab to upload files and enable grounded retrieval.
-                </p>
+              {/* Header */}
+              <div className="flex items-center gap-2">
+                <motion.div
+                  animate={{ opacity: [0.4, 0.9, 0.4] }}
+                  transition={{ duration: 3, repeat: Infinity }}
+                >
+                  <MessageSquare className="w-4 h-4 text-cyan-400/50" />
+                </motion.div>
+                <span className="text-[10px] font-mono uppercase tracking-widest text-white/30">
+                  Getting started
+                </span>
               </div>
+
+              {/* Onboarding steps */}
+              <div className="space-y-2.5">
+                {([
+                  {
+                    num: '1',
+                    icon: HardDrive,
+                    color: '#22d3ee',
+                    title: 'Upload knowledge',
+                    desc: 'Open the Vault tab → upload PDF, DOCX, image, or transcript → Aivora indexes it into pgvector.',
+                  },
+                  {
+                    num: '2',
+                    icon: Database,
+                    color: '#8b5cf6',
+                    title: 'Ask or run a Studio workflow',
+                    desc: 'Type a question for grounded RAG answers, or open the Studio tab to run Study Pack, Blog Post, Video Script, and more.',
+                  },
+                  {
+                    num: '3',
+                    icon: Download,
+                    color: '#f59e0b',
+                    title: 'Export your output',
+                    desc: 'Copy Markdown, download as PDF, or export a presentation as .pptx — all from the message export bar.',
+                  },
+                ] as const).map(({ num, icon: Icon, color, title, desc }) => (
+                  <div key={num} className="flex gap-3 p-3 rounded-xl bg-white/[0.025] border border-white/6">
+                    <div
+                      className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5"
+                      style={{ background: `${color}18`, border: `1px solid ${color}30` }}
+                    >
+                      <Icon className="w-3 h-3" style={{ color }} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-semibold text-white/70 mb-0.5">{title}</p>
+                      <p className="text-[10px] text-white/30 leading-relaxed">{desc}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Example prompts */}
+              <div>
+                <p className="text-[9px] font-mono uppercase tracking-widest text-white/20 mb-2">
+                  Try an example
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    'Summarize my documents in clear bullet points.',
+                    'What are the key people mentioned in this document?',
+                    'Extract a chronological timeline of events.',
+                    'Generate a FAQ with 5 questions and answers.',
+                  ].map((prompt) => (
+                    <button
+                      key={prompt}
+                      onClick={() => setInput(prompt)}
+                      className="px-2.5 py-1.5 rounded-xl bg-white/4 border border-white/8 text-[10px] font-mono text-white/40
+                        hover:bg-cyan-500/10 hover:border-cyan-400/20 hover:text-cyan-300 transition-all duration-150 text-left"
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* WebGPU chip */}
               {mounted && isWebGPUSupported() && (
-                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-violet-500/10 border border-violet-400/15">
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-violet-500/10 border border-violet-400/15 self-start">
                   <BrainCircuit className="w-3 h-3 text-violet-400" />
-                  <span className="text-[10px] text-violet-300">WebGPU detected — Local WebLLM available</span>
+                  <span className="text-[10px] text-violet-300 font-mono">WebGPU detected — Local WebLLM available</span>
                 </div>
               )}
             </motion.div>
